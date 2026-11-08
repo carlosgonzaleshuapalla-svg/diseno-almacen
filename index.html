@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Diseñador de Almacén</title>
+<link rel="stylesheet" href="estilos.css">
+
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta name="theme-color" content="#1f3a5f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Almacén">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+</head>
+<body>
+<a class="saltar" href="#principal">Saltar al contenido</a>
+
+<header id="barra">
+  <div class="marca" aria-hidden="false">
+    <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
+      <rect x="2" y="3" width="28" height="26" rx="4" fill="currentColor" opacity=".14"/>
+      <rect x="6" y="7" width="8" height="18" rx="1.5" fill="currentColor"/>
+      <rect x="18" y="7" width="8" height="8" rx="1.5" fill="currentColor" opacity=".7"/>
+      <rect x="18" y="17" width="8" height="8" rx="1.5" fill="currentColor" opacity=".45"/>
+    </svg>
+    <span class="marca-txt">Diseñador de Almacén</span>
+  </div>
+  <label class="proy">
+    <span class="sr">Nombre del proyecto</span>
+    <input id="nombre-proyecto" type="text" maxlength="80" placeholder="Nombre del proyecto" autocomplete="off">
+  </label>
+  <nav id="pasos" aria-label="Pasos del proyecto">
+    <button type="button" class="paso" data-tab="plano" id="paso-plano"><span class="num">1</span><span class="txt"><b>Plano</b><small id="est-plano">—</small></span></button>
+    <button type="button" class="paso" data-tab="racks" id="paso-racks"><span class="num">2</span><span class="txt"><b>Racks</b><small id="est-racks">—</small></span></button>
+    <button type="button" class="paso" data-tab="articulos" id="paso-articulos"><span class="num">3</span><span class="txt"><b>Artículos</b><small id="est-articulos">—</small></span></button>
+    <button type="button" class="paso" data-tab="asignar" id="paso-asignar"><span class="num">4</span><span class="txt"><b>Asignar</b><small id="est-asignar">—</small></span></button>
+    <button type="button" class="paso" data-tab="analisis" id="paso-analisis"><span class="num">5</span><span class="txt"><b>Análisis</b><small id="est-analisis">—</small></span></button>
+    <button type="button" class="paso" data-tab="reportes" id="paso-reportes"><span class="num">6</span><span class="txt"><b>Reportes</b><small id="est-reportes">—</small></span></button>
+  </nav>
+  <div class="barra-acc">
+    <button type="button" id="btn-ejemplo" class="btn primario">Cargar ejemplo</button>
+    <button type="button" id="btn-nuevo" class="btn">Nuevo</button>
+    <span id="estado-guardado" class="guardado" role="status" aria-live="polite"></span>
+  </div>
+</header>
+
+<main id="principal">
+
+<!-- ====================== ÁREA CON LIENZO (Plano, Racks, Asignar) ====================== -->
+<div id="area-lienzo" class="area">
+
+  <!-- ---------- Panel izquierdo ---------- -->
+  <aside id="panel-izq" class="panel" aria-label="Controles">
+
+    <!-- PLANO -->
+    <div class="panel-tab" id="p-plano">
+      <section class="caja">
+        <h3><span class="n">1</span> Imagen del plano <span class="opc">(opcional)</span></h3>
+        <label class="soltar" id="zona-soltar" for="inp-imagen">
+          <strong>Subir imagen</strong> (PNG/JPG)<br><span class="peq">o arrástrala aquí, o pégala con Ctrl+V</span>
+        </label>
+        <input type="file" id="inp-imagen" accept="image/png,image/jpeg,image/webp,image/*" class="sr-input">
+        <div id="info-imagen" class="peq muted">Sin imagen. Puedes definir el almacén solo con medidas (paso 3).</div>
+        <div class="fila" id="fila-opacidad">
+          <label for="rng-opacidad">Opacidad de la imagen</label>
+          <input type="range" id="rng-opacidad" min="0.05" max="1" step="0.05" value="0.5">
+        </div>
+        <button type="button" class="btn peq-btn" id="btn-quitar-imagen">Quitar imagen</button>
+      </section>
+
+      <section class="caja">
+        <h3><span class="n">2</span> Calibrar escala</h3>
+        <p class="peq muted">Haz clic en <b>2 puntos</b> de la imagen cuya distancia real conozcas (p. ej. los extremos de una pared) y escribe esa distancia en metros.</p>
+        <button type="button" class="btn" id="btn-calibrar">Calibrar con 2 clics</button>
+        <div id="form-calib" class="subform" hidden>
+          <label for="inp-metros">Distancia real entre los 2 puntos (m)</label>
+          <div class="fila-inp">
+            <input type="number" id="inp-metros" min="0.01" step="0.01" inputmode="decimal" placeholder="p. ej. 25">
+            <button type="button" class="btn primario" id="btn-calib-ok">Aplicar</button>
+            <button type="button" class="btn" id="btn-calib-cancel">Cancelar</button>
+          </div>
+        </div>
+        <div id="info-escala" class="peq muted"></div>
+      </section>
+
+      <section class="caja">
+        <h3><span class="n">3</span> Contorno del almacén</h3>
+        <button type="button" class="btn primario" id="btn-autotrazo">Auto-trazar desde la imagen</button>
+        <p class="peq muted" id="ayuda-autotrazo">Pulsa el botón y haz clic <b>dentro</b> del almacén en la imagen (necesita imagen y escala).</p>
+        <div id="trz-panel" class="subform" hidden>
+          <div class="ctrl">
+            <label for="trz-umbral">Umbral de «piso libre» <output id="out-umbral">180</output></label>
+            <input type="range" id="trz-umbral" min="10" max="250" step="1" value="180">
+            <small class="muted">Más alto = solo píxeles muy claros cuentan como piso.</small>
+          </div>
+          <div class="ctrl">
+            <label for="trz-tol">Simplificación del contorno <output id="out-tol">3</output> px</label>
+            <input type="range" id="trz-tol" min="0" max="30" step="0.5" value="3">
+          </div>
+          <div class="ctrl">
+            <label for="trz-areamin">Tamaño mínimo de obstáculo <output id="out-areamin">40</output> px²</label>
+            <input type="range" id="trz-areamin" min="1" max="2000" step="1" value="40">
+          </div>
+          <div id="trz-info" class="peq" role="status" aria-live="polite"></div>
+          <div class="fila-inp">
+            <button type="button" class="btn primario" id="btn-trz-ok" disabled>Usar este contorno</button>
+            <button type="button" class="btn" id="btn-trz-cancel">Cancelar</button>
+          </div>
+          <p class="peq muted">Puedes cambiar el punto de partida haciendo otro clic en la imagen.</p>
+        </div>
+
+        <details class="mini">
+          <summary>Dibujar el contorno a mano</summary>
+          <p class="peq muted">Clic para cada esquina; <b>doble clic</b> o <b>Enter</b> para cerrar; <b>Esc</b> cancela.</p>
+          <button type="button" class="btn" data-herr="contorno-poli">Dibujar contorno</button>
+        </details>
+        <details class="mini">
+          <summary>Plantilla: rectángulo</summary>
+          <div class="rejilla2">
+            <label>Ancho (m)<input type="number" id="tpl-ancho" value="40" min="1" step="0.5"></label>
+            <label>Largo (m)<input type="number" id="tpl-largo" value="25" min="1" step="0.5"></label>
+          </div>
+          <button type="button" class="btn" id="btn-tpl-rect">Crear rectángulo</button>
+        </details>
+        <details class="mini">
+          <summary>Plantilla: forma en L</summary>
+          <div class="rejilla2">
+            <label>Ancho total (m)<input type="number" id="l-ancho-total" value="40" min="2" step="0.5"></label>
+            <label>Largo total (m)<input type="number" id="l-largo-total" value="28" min="2" step="0.5"></label>
+            <label>Ancho del brazo vertical (m)<input type="number" id="l-ancho-brazo" value="15" min="1" step="0.5"></label>
+            <label>Espesor del brazo horizontal (m)<input type="number" id="l-largo-brazo" value="12" min="1" step="0.5"></label>
+          </div>
+          <button type="button" class="btn" id="btn-tpl-l">Crear forma en L</button>
+        </details>
+      </section>
+
+      <section class="caja">
+        <h3><span class="n">4</span> Obstáculos, puertas y zonas</h3>
+        <div class="grupo-herr">
+          <div class="fila-inp">
+            <button type="button" class="btn" data-herr="columna">Columna (1 clic)</button>
+            <label class="inline">Lado <input type="number" id="inp-col-tam" value="0.5" min="0.1" step="0.1" style="width:4.5em"> m</label>
+          </div>
+          <div class="fila-inp">
+            <button type="button" class="btn" data-herr="hueco-rect">Obstáculo rectangular</button>
+            <button type="button" class="btn" data-herr="hueco-poli">Obstáculo polígono</button>
+          </div>
+          <label class="inline">Tipo de obstáculo
+            <select id="sel-hueco-tipo">
+              <option value="muro">Muro</option>
+              <option value="oficina">Oficina</option>
+              <option value="equipo">Equipo</option>
+              <option value="otro">Otro</option>
+              <option value="columna">Columna</option>
+            </select>
+          </label>
+        </div>
+        <div class="grupo-herr">
+          <div class="fila-inp">
+            <button type="button" class="btn" data-herr="puerta">Añadir puerta (1 clic)</button>
+            <select id="sel-puerta-tipo" aria-label="Tipo de puerta">
+              <option value="recepcion">Recepción</option>
+              <option value="despacho">Despacho</option>
+              <option value="mixta">Mixta</option>
+              <option value="salida_emergencia">Salida de emergencia</option>
+            </select>
+          </div>
+        </div>
+        <div class="grupo-herr">
+          <div class="fila-inp">
+            <button type="button" class="btn" data-herr="zona-rect">Zona rectangular</button>
+            <button type="button" class="btn" data-herr="zona-poli">Zona polígono</button>
+          </div>
+          <label class="inline">Tipo de zona
+            <select id="sel-zona-tipo">
+              <option value="frio">Frío</option>
+              <option value="peligrosos">Peligrosos</option>
+              <option value="alto_valor">Alto valor</option>
+              <option value="cuarentena">Cuarentena</option>
+              <option value="general">General</option>
+              <option value="almacenaje">Almacenaje (con su propia configuración)</option>
+              <option value="muelle">Muelle (andén)</option>
+              <option value="staging">Staging (zona de preparación)</option>
+            </select>
+          </label>
+        </div>
+        <p class="peq muted">Rectángulos: arrastra de una esquina a la opuesta. Polígonos: clic por vértice, doble clic o Enter para cerrar.</p>
+      </section>
+
+      <section class="caja">
+        <h3><span class="n">5</span> Cuadrícula y ajuste</h3>
+        <div class="fila-inp">
+          <label class="inline">Ajustar a
+            <select id="sel-snap">
+              <option value="0">Sin ajuste</option>
+              <option value="0.1">0,1 m</option>
+              <option value="0.5" selected>0,5 m</option>
+              <option value="1">1 m</option>
+            </select>
+          </label>
+          <label class="inline"><input type="checkbox" id="chk-grid" checked> Mostrar cuadrícula</label>
+        </div>
+      </section>
+    </div>
+
+    <!-- RACKS -->
+    <div class="panel-tab" id="p-racks" hidden>
+      <section class="caja">
+        <h3>Equipo y pasillos</h3>
+        <label>Equipo de manejo
+          <select id="sel-equipo"></select>
+        </label>
+        <div class="rejilla2">
+          <label>Ancho de pasillo (m)<input type="number" id="inp-ancho-pasillo" min="0.6" step="0.05"></label>
+          <label>Pasillo de cruce (m)<input type="number" id="inp-ancho-cruce" min="0.6" step="0.05"></label>
+        </div>
+        <p class="peq muted">Son un <b>orden de magnitud</b> <b>[VERIFICAR con la ficha del equipo]</b>: el pasillo real = ancho del equipo + largo del palet + holguras. «Manual» = persona o carro de picking. Puedes editarlos.</p>
+        <div class="rejilla2">
+          <label>Altura libre de nave (m)<input type="number" id="inp-altura-nave" min="1" max="40" step="0.1"></label>
+          <label>Holgura a rociadores (m)<input type="number" id="inp-holgura" min="0" max="3" step="0.05" placeholder="auto"></label>
+        </div>
+        <label>Tipo de rociador
+          <select id="sel-rociador">
+            <option value="estandar">Estándar (spray)</option>
+            <option value="esfr">ESFR</option>
+          </select>
+        </label>
+        <p class="peq muted">La altura libre es <b>hasta el obstáculo más bajo</b> (tijeral, tubería o luminaria), no al alero. La holgura vacía («auto») se deriva del tipo de rociador (estándar 0,75 m, ESFR 1,2 m) y depende también de la mercadería: <b>[VERIFICAR con el ingeniero de protección contra incendios (NFPA 13 / RNE A.130)]</b>.</p>
+        <details class="mini">
+          <summary>Avanzado</summary>
+          <label>Pasillo trasero o «flue» entre racks dobles (m) <span class="verif">[VERIFICAR NFPA 13 / ficha]</span><input type="number" id="inp-flue" min="0" max="1" step="0.01"></label>
+          <div class="rejilla2">
+            <label>Perfil de viga (m) <span class="verif">[VERIFICAR ficha / EN 15620]</span><input type="number" id="inp-perfil-viga" min="0" max="0.5" step="0.01"></label>
+            <label>Holgura sobre la carga (m) <span class="verif">[VERIFICAR EN 15620]</span><input type="number" id="inp-holgura-carga" min="0" max="0.5" step="0.01"></label>
+          </div>
+          <p class="peq muted">Cargas máximas por posición: son <b>valores por defecto</b>; la real es la placa del fabricante. Resistencia del piso, anclaje sísmico y losa <b>no se calculan aquí</b>: <b>[VERIFICAR con el ingeniero estructural]</b>.</p>
+        </details>
+      </section>
+
+      <section class="caja">
+        <h3>Generar racks automáticamente</h3>
+        <div class="rejilla2">
+          <label>Orientación
+            <select id="g-orient">
+              <option value="auto">Automática (mejor)</option>
+              <option value="horizontal">Horizontal</option>
+              <option value="vertical">Vertical</option>
+              <option value="lado_largo">Paralela al lado largo</option>
+            </select>
+          </label>
+          <label>Tipo de ubicación
+            <select id="g-tipo">
+              <option value="palet">Palet</option>
+              <option value="bin">Bin (bandeja)</option>
+              <option value="piso">Piso (carril de bloque)</option>
+              <option value="cantilever">Cantilever (carga larga)</option>
+            </select>
+          </label>
+          <label class="solo-piso">Profundidad de carril (palets)<input type="number" id="g-prof" value="1" min="1" max="50" step="1"></label>
+          <label class="solo-piso">Apilado en altura (palets)<input type="number" id="g-apil" value="1" min="1" max="10" step="1"></label>
+          <label>Largo de módulo (m)<input type="number" id="g-largo" value="2.7" min="0.5" step="0.1"></label>
+          <label>Fondo (m)<input type="number" id="g-fondo" value="1.1" min="0.3" step="0.05"></label>
+          <label>Niveles <input type="number" id="g-niveles" min="1" max="12" step="1" placeholder="auto"></label>
+          <label>Posiciones por módulo<input type="number" id="g-slots" value="2" min="1" max="6" step="1"></label>
+          <label>Módulos por tramo<input type="number" id="g-modulos-tramo" value="8" min="2" step="1"></label>
+          <label>Libre frente a puertas (m)<input type="number" id="g-reserva" value="3" min="0" step="0.5"></label>
+        </div>
+        <label class="inline"><input type="checkbox" id="g-dobles" checked> Racks dobles (espalda con espalda)</label>
+        <label class="inline"><input type="checkbox" id="g-rellenar" checked> Rellenar sobrantes junto al muro</label>
+        <button type="button" class="btn grande primario" id="btn-generar">Generar racks automáticamente</button>
+        <div id="gen-resumen" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="caja">
+        <h3>Racks a mano</h3>
+        <div class="fila-inp">
+          <button type="button" class="btn" id="btn-rack-nuevo">Añadir rack</button>
+          <button type="button" class="btn" id="btn-rack-dup">Duplicar</button>
+          <button type="button" class="btn" id="btn-rack-rot">Rotar 90° (R)</button>
+          <button type="button" class="btn peligro" id="btn-rack-borrar">Borrar</button>
+        </div>
+        <p class="peq muted">Arrastra un rack en el plano para moverlo; selecciónalo para editar sus propiedades a la derecha.</p>
+        <button type="button" class="btn peq-btn" id="btn-racks-borrar-auto">Borrar todos los racks automáticos</button>
+      </section>
+    </div>
+
+    <!-- ASIGNAR -->
+    <div class="panel-tab" id="p-asignar" hidden>
+      <section class="caja">
+        <h3>Asignar ubicaciones</h3>
+        <button type="button" class="btn grande primario" id="btn-asignar">Asignar ubicaciones</button>
+        <div id="asig-estado" class="peq" role="status" aria-live="polite"></div>
+        <details class="mini" open>
+          <summary>Opciones</summary>
+          <div class="ctrl">
+            <label for="a-peso-rec">Peso de la ruta desde recepción: <output id="out-peso-rec">30</output> % (despacho: <output id="out-peso-desp">70</output> %)</label>
+            <input type="range" id="a-peso-rec" min="0" max="100" step="5" value="30">
+          </div>
+          <div class="rejilla2">
+            <label>Pasadas de mejora<input type="number" id="a-pasadas" min="0" max="10" step="1" value="3"></label>
+            <label>Separación incompatibles (m)<input type="number" id="a-sep" min="0" step="0.5" value="6"></label>
+            <label>Penalización por nivel de palet (m eq.) <span class="verif">[VERIFICAR ficha del equipo: velocidades de elevación]</span><input type="number" id="a-penal" min="0" max="20" step="0.5" value="2.5"></label>
+            <label>Clase A hasta (% picks)<input type="number" id="a-abc-a" min="50" max="95" step="1" value="80"></label>
+            <label>Clase B hasta (% picks)<input type="number" id="a-abc-b" min="60" max="99" step="1" value="95"></label>
+          </div>
+          <h4 class="sub-h">Opciones v1.1</h4>
+          <label>Dimensionar por
+            <select id="a-dimensionar"><option value="actual">Stock actual (cantidad)</option><option value="maximo">Stock máximo del pico (usa «stock máx.»)</option></select>
+          </label>
+          <label class="inline"><input type="checkbox" id="a-repos"> Modo picking / reserva (los picks cargan solo la posición de picking; la reserva carga reposiciones)</label>
+          <div class="rejilla2">
+            <label>Posiciones de picking por SKU (modo picking/reserva)<input type="number" id="a-pospick" min="1" max="10" step="1" value="1"></label>
+            <label>Peso de afinidad (0 a 1)<input type="number" id="a-afin" min="0" max="1" step="0.05" value="0.3"></label>
+            <label>Fecha de referencia (vencimientos)<input type="date" id="a-fecha"></label>
+            <label>Alertar «por vencer» a los (días)<input type="number" id="a-dias-venc" min="0" max="3650" step="1" placeholder="dato suyo"></label>
+          </div>
+          <p class="peq muted dato-suyo">Fecha de referencia vacía = hoy (solo la pantalla lee el reloj; el motor recibe la fecha). Sin «días de alerta» solo se marcan los <b>vencidos</b>. Con pocos pedidos la afinidad es solo indicativa <span class="verif">[VERIFICAR]</span>.</p>
+          <label class="inline"><input type="checkbox" id="a-seg-usar" checked> Segregación por clase de peligro entre racks <span class="verif">[VERIFICAR con HDS y seguridad-sst]</span></label>
+          <details class="mini" id="seg-det"><summary>Ver / editar la matriz de segregación</summary><div id="seg-matriz"></div></details>
+        </details>
+      </section>
+
+      <section class="caja">
+        <h3>Ver en el plano</h3>
+        <div class="radios" role="radiogroup" aria-label="Mapa a mostrar">
+          <label><input type="radio" name="vista" value="abc" checked> Clase ABC</label>
+          <label><input type="radio" name="vista" value="dist"> Calor: distancia al despacho</label>
+          <label><input type="radio" name="vista" value="picks"> Calor: picks del SKU</label>
+          <label><input type="radio" name="vista" value="rol"> Rol: picking / reserva</label>
+          <label><input type="radio" name="vista" value="carga"> Carga por módulo (kg / capacidad)</label>
+          <label><input type="radio" name="vista" value="nada"> Solo racks</label>
+        </div>
+        <label class="inline capa-chk"><input type="checkbox" id="chk-capa-evac"> Capa: mapa de calor de evacuación</label>
+        <p class="peq muted" id="capa-nota">La capa de evacuación sale del Análisis (distancia caminando a la salida de emergencia más cercana). Solo muestra valores: el límite es dato suyo <span class="verif">[VERIFICAR RNE A.130 / ITSE]</span>.</p>
+      </section>
+
+      <section class="caja">
+        <h3>Buscar un SKU</h3>
+        <div class="fila-inp">
+          <input type="search" id="inp-sku" list="sku-lista" placeholder="Escribe un SKU" autocomplete="off" aria-label="SKU a buscar">
+          <button type="button" class="btn" id="btn-buscar">Buscar</button>
+        </div>
+        <datalist id="sku-lista"></datalist>
+        <div id="busqueda-info" class="peq" role="status" aria-live="polite"></div>
+        <button type="button" class="btn peq-btn" id="btn-limpiar-busqueda" hidden>Quitar resaltado</button>
+      </section>
+
+      <section class="caja">
+        <details class="mini" id="como-se-decide" open>
+          <summary><b>Cómo se decide</b></summary>
+          <div id="como-lista"></div>
+          <p class="peq aviso-honesto">Es una <b>propuesta</b> a validar por el responsable de almacén: norma de rociadores, capacidad de carga del piso (no se calcula aquí) y ancho de pasillo real del equipo.</p>
+        </details>
+      </section>
+    </div>
+  </aside>
+
+  <!-- ---------- Centro: lienzo ---------- -->
+  <section id="centro" aria-label="Plano">
+    <div id="barra-lienzo" role="toolbar" aria-label="Herramientas del lienzo">
+      <button type="button" class="ibtn" id="tb-sel" data-herr="seleccionar" title="Seleccionar y mover (V)" aria-pressed="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 3l14 8-6 1.6L10.5 19z" fill="currentColor"/></svg><span>Seleccionar</span></button>
+      <button type="button" class="ibtn" id="tb-mano" data-herr="mano" title="Desplazar (mantén Espacio)" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 11V5a1.5 1.5 0 013 0v5m0 0V4a1.5 1.5 0 013 0v7m0-2a1.5 1.5 0 013 0v6a6 6 0 01-6 6h-1a6 6 0 01-5-3l-3-5a1.5 1.5 0 012.5-1.5L9 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Mano</span></button>
+      <span class="sep"></span>
+      <button type="button" class="ibtn" id="tb-undo" title="Deshacer (Ctrl+Z)"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 7L4 12l5 5M4 12h10a6 6 0 010 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -3)"/></svg><span>Deshacer</span></button>
+      <button type="button" class="ibtn" id="tb-redo" title="Rehacer (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 7l5 5-5 5M20 12H10a6 6 0 000 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -3)"/></svg><span>Rehacer</span></button>
+      <span class="sep"></span>
+      <button type="button" class="ibtn" id="tb-zoom-out" title="Alejar" aria-label="Alejar">−</button>
+      <button type="button" class="ibtn" id="tb-zoom-in" title="Acercar" aria-label="Acercar">+</button>
+      <button type="button" class="ibtn" id="tb-encajar" title="Encajar a pantalla (F)"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Encajar</span></button>
+    </div>
+
+    <div id="marco">
+      <canvas id="lienzo" tabindex="0" aria-label="Plano del almacén. Usa la rueda para acercar y arrastra para desplazar."></canvas>
+      <div id="tb-herr-msg" class="herr-msg" role="status" aria-live="polite"></div>
+      <div id="vacio" hidden></div>
+      <div id="espera" hidden role="status"><span class="spinner" aria-hidden="true"></span><span id="espera-txt">Calculando…</span></div>
+    </div>
+    <div id="estado-lienzo" aria-live="off">
+      <span id="est-coord">x: — m · y: — m</span>
+      <span id="est-zoom"></span>
+      <span id="est-ayuda" class="muted"></span>
+    </div>
+  </section>
+
+  <!-- ---------- Panel derecho ---------- -->
+  <aside id="panel-der" class="panel" aria-label="Detalles y resultados">
+
+    <div class="panel-tab" id="r-plano">
+      <section class="caja">
+        <h3>Elemento seleccionado</h3>
+        <div id="sel-detalle"><p class="peq muted">Haz clic en un elemento del plano (contorno, obstáculo, puerta, zona) para editarlo. Arrastra sus vértices para cambiar su forma; doble clic en un borde añade un vértice; <b>Supr</b> borra.</p></div>
+      </section>
+      <section class="caja">
+        <h3>Resumen del plano</h3>
+        <div id="resumen-plano" class="peq"></div>
+      </section>
+    </div>
+
+    <div class="panel-tab" id="r-racks" hidden>
+      <section class="caja">
+        <h3>Rack seleccionado</h3>
+        <div id="rack-props"><p class="peq muted">Selecciona un rack en el plano para editar sus propiedades.</p></div>
+      </section>
+      <section class="caja">
+        <h3>Revisión del diseño</h3>
+        <div id="validacion" class="peq" role="status" aria-live="polite"></div>
+      </section>
+    </div>
+
+    <div class="panel-tab" id="r-asignar" hidden>
+      <section class="caja" id="caja-kpis">
+        <h3>Resultado</h3>
+        <div id="kpis"><p class="peq muted">Todavía no hay asignación. Pulsa <b>«Asignar ubicaciones»</b>.</p></div>
+      </section>
+      <section class="caja">
+        <h3>Elevación frontal del rack</h3>
+        <div id="elev-titulo" class="peq muted">Pasa el mouse o selecciona un rack en el plano.</div>
+        <canvas id="canvas-elev" width="320" height="200" aria-label="Elevación frontal del rack"></canvas>
+        <div id="elev-leyenda" class="peq muted"></div>
+        <div id="pos-detalle" class="peq"></div>
+      </section>
+      <section class="caja">
+        <h3>No ubicados</h3>
+        <div id="no-ubicados" class="peq muted">—</div>
+      </section>
+      <section class="caja">
+        <h3>Supuestos y advertencias</h3>
+        <div id="supuestos" class="peq muted">—</div>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<!-- ====================== ARTÍCULOS ====================== -->
+<div id="area-articulos" class="pagina" hidden>
+  <div class="pagina-int">
+    <div class="pag-cab">
+      <h2>Artículos (SKU)</h2>
+      <div class="barra-acc-pag">
+        <button type="button" class="btn" id="art-add">Añadir fila</button>
+        <button type="button" class="btn" id="art-import">Importar CSV</button>
+        <button type="button" class="btn" id="art-export">Exportar CSV</button>
+        <button type="button" class="btn" id="art-plantilla">Descargar plantilla</button>
+        <button type="button" class="btn" id="art-ejemplo">Cargar ejemplo</button>
+        <button type="button" class="btn peligro" id="art-borrar-todo">Borrar todos</button>
+        <input type="file" id="inp-csv" accept=".csv,.txt,text/csv,text/plain" class="sr-input">
+      </div>
+    </div>
+    <div id="art-errores" class="alerta" hidden></div>
+    <div class="grid-art">
+      <section class="caja" id="art-resumen-caja">
+        <h3>Posiciones necesarias vs. disponibles</h3>
+        <div id="art-resumen"></div>
+      </section>
+      <section class="caja" id="art-pareto-caja">
+        <h3>Pareto ABC (picks por SKU)</h3>
+        <canvas id="canvas-pareto" width="640" height="260" aria-label="Gráfico de Pareto ABC"></canvas>
+        <div id="pareto-leyenda" class="peq muted"></div>
+      </section>
+    </div>
+    <div id="art-vacio" class="vacio-pag" hidden></div>
+    <div class="fila-inp filtro-art">
+      <input type="search" id="art-filtro" placeholder="Filtrar por SKU, descripción o familia" aria-label="Filtrar artículos">
+      <span id="art-contador" class="peq muted"></span>
+      <span class="grow"></span>
+      <button type="button" class="btn peq-btn" id="art-prev" aria-label="Página anterior">‹</button>
+      <span id="art-pag" class="peq"></span>
+      <button type="button" class="btn peq-btn" id="art-next" aria-label="Página siguiente">›</button>
+    </div>
+    <section class="caja" id="art-pedidos-caja">
+      <h3>Pedidos para afinidad por co-ocurrencia <span class="opc">(opcional)</span></h3>
+      <p class="peq muted">Historial de pedidos reales (CSV <code>pedido;sku;cant</code>). Con él, el programa acerca los SKU que se piden juntos. Sin pedidos, no se usa afinidad.</p>
+      <div class="fila-inp">
+        <button type="button" class="btn" id="ped-import">Importar pedidos (CSV)</button>
+        <button type="button" class="btn" id="ped-plantilla">Plantilla de pedidos</button>
+        <button type="button" class="btn" id="ped-afin">Ver afinidad</button>
+        <button type="button" class="btn peligro" id="ped-borrar">Quitar pedidos</button>
+        <input type="file" id="inp-ped" accept=".csv,.txt,text/csv,text/plain" class="sr-input">
+      </div>
+      <div id="ped-resumen" class="peq" role="status" aria-live="polite"></div>
+      <div id="ped-afinidad"></div>
+    </section>
+    <details class="caja" id="art-adv-caja" open>
+      <summary><b>Avanzado</b> · <span id="art-adv-titulo" class="muted">elige un artículo con el botón «Avanzado» de su fila</span></summary>
+      <div id="art-adv"></div>
+    </details>
+    <div class="tabla-caja">
+      <table id="tabla-art" class="tabla">
+        <thead>
+          <tr>
+            <th scope="col">SKU</th><th scope="col">Descripción</th><th scope="col">Familia</th>
+            <th scope="col" class="num" title="Stock a ubicar. Si la ubicación es fija, usa el máximo.">Cantidad<small class="th-sub">stock a ubicar (máx. si es fija)</small></th><th scope="col" class="num" title="Unidades por ubicación">Unid./ubic.</th>
+            <th scope="col" class="num" title="Líneas de pedido (salidas). Define el periodo y cuida la estacionalidad.">Picks<small class="th-sub">por periodo (define cuál; ojo estacionalidad)</small></th>
+            <th scope="col" class="num" title="Vacío = se estima">Entradas</th>
+            <th scope="col" class="num">Peso unit. (kg)</th><th scope="col" class="num" title="Altura de la carga incluyendo el palet">Alto carga (m)<small class="th-sub">incluye palet</small></th>
+            <th scope="col">Tipo</th><th scope="col">Zona requerida</th><th scope="col" title="Familias separadas con |">Incompatibles</th>
+            <th scope="col">ABC</th><th scope="col" class="num" title="Posiciones necesarias">Pos.</th><th scope="col" title="Stock máx., picks pico, lotes, FEFO, cross-docking, peligro, largo, apilado"><span class="sr">Avanzado</span>Avanz.</th><th scope="col"><span class="sr">Borrar</span></th>
+          </tr>
+        </thead>
+        <tbody id="tbody-art"></tbody>
+      </table>
+    </div>
+    <p class="peq muted">Formato CSV: <code>sku, descripcion, familia, cantidad, unidades_por_ubicacion, picks, entradas, peso_unit_kg, alto_carga_m, tipo_ubicacion, requiere_zona, incompatible_con</code> (separador coma o punto y coma; decimales con coma o punto; incompatibles separados con <code>|</code>). Columnas opcionales v1.1: <code>stock_max, picks_pico, unidades_por_linea, peligro, fefo, crossdock, flujo_crossdock, largo_m, apilable_max</code> y <code>lotes</code> (<code>L1:480:2027-03-31|L2:…</code>). Los datos del ejemplo están rotulados «EJEMPLO – editar»: reemplázalos por los tuyos.</p>
+  </div>
+</div>
+
+<!-- ====================== ANÁLISIS ====================== -->
+<div id="area-analisis" class="pagina" hidden>
+  <div class="pagina-int">
+    <div class="pag-cab">
+      <h2>Análisis de espacio, capacidad y movimiento</h2>
+      <div class="barra-acc-pag">
+        <button type="button" class="btn primario" id="an-calcular">Calcular análisis</button>
+        <span id="an-estado" class="peq" role="status" aria-live="polite"></span>
+      </div>
+    </div>
+    <p class="aviso-honesto peq">Valores geométricos calculados sobre su plano; los valores de referencia son típicos y deben verificarse; las horas son una cota superior bajo estos supuestos (un viaje por línea). Si deja vacíos la velocidad o los segundos por pick, se usa un supuesto que el análisis rotula [VERIFICAR].</p>
+    <section class="caja" id="an-opciones-caja">
+      <h3>Opciones del cálculo</h3>
+      <div class="an-opts">
+        <label>Velocidad (m/s)<input type="number" id="an-vel" min="0.1" max="10" step="0.1" placeholder="1,5 (manual 1,0)"></label>
+        <label>Segundos por pick<input type="number" id="an-seg" min="0" max="600" step="1" placeholder="30"></label>
+        <label>Periodo (días)<input type="number" id="an-periodo" min="1" max="366" step="1" value="30"></label>
+        <label>Costo por hora (opcional)<input type="number" id="an-costo" min="0" step="0.5" placeholder="vacío = sin dinero"></label>
+        <label>Crecimiento % (opcional)<input type="number" id="an-crec" min="-90" max="500" step="1" placeholder="vacío = no proyectar"></label>
+        <label>Ocupación objetivo %<input type="number" id="an-ocup" min="30" max="100" step="1" value="85"></label>
+      </div>
+      <label class="inline"><input type="checkbox" id="an-escenarios" checked> Incluir escenarios <span class="muted">(tarda unos segundos)</span></label>
+      <p class="peq muted">Sin costo por hora no se calcula ningún valor en dinero: ese dato solo lo pone usted.</p>
+    </section>
+    <section class="caja" id="an-datos-caja">
+      <h3>Datos suyos (límites y muelle)</h3>
+      <p class="peq muted dato-suyo">Vacíos por defecto. El programa <b>no afirma cumplimiento</b> de ninguna norma sin el límite que usted ponga; los valores normativos se verifican con el especialista <span class="verif">[VERIFICAR RNE A.130 / ITSE / NFPA / ingeniero estructural]</span>.</p>
+      <div class="an-opts">
+        <label>Distancia máx. de evacuación (m)<input type="number" id="d-evac" min="1" step="1" placeholder="dato suyo"></label>
+        <label>Ancho mínimo de pasillo de evacuación (m)<input type="number" id="d-evac-ancho" min="0.3" step="0.05" placeholder="dato suyo"></label>
+        <label>Capacidad de la losa (kg/m²)<input type="number" id="d-carga-piso" min="1" step="50" placeholder="dato suyo"></label>
+      </div>
+      <details class="mini" id="d-muelle-det" open>
+        <summary>Muelle y staging (todo suyo)</summary>
+        <div class="an-opts">
+          <label>Palets/día en recepción<input type="number" id="m-rec" min="0" step="1" placeholder="dato suyo"></label>
+          <label>Palets/día en despacho<input type="number" id="m-desp" min="0" step="1" placeholder="dato suyo"></label>
+          <label>Días de permanencia (recepción)<input type="number" id="m-dias-rec" min="0" step="0.5" value="1"></label>
+          <label>Días de permanencia (despacho)<input type="number" id="m-dias-desp" min="0" step="0.5" value="1"></label>
+          <label>m² por palet<input type="number" id="m-m2" min="0.1" step="0.1" placeholder="vacío: se estima 1,2×1,0 [VERIFICAR]"></label>
+          <label>Factor de maniobra<input type="number" id="m-maniobra" min="1" step="0.1" placeholder="vacío: típico [VERIFICAR]"></label>
+        </div>
+        <p class="peq muted">Las zonas «muelle» y «staging» del plano aportan el área disponible para comparar.</p>
+      </details>
+    </section>
+    <div id="an-vacio" class="vacio-pag" hidden></div>
+    <div id="an-resultado" hidden>
+      <div class="grid-an">
+        <section class="caja">
+          <h3>Dónde se va el espacio</h3>
+          <canvas id="canvas-areas" width="420" height="240" aria-label="Gráfico de áreas del almacén: huella de racks, circulación, libre y huecos"></canvas>
+          <div id="an-areas-leyenda" class="peq"></div>
+        </section>
+        <section class="caja">
+          <h3>Áreas medidas</h3>
+          <div id="an-areas-tabla"></div>
+        </section>
+      </div>
+      <section class="caja"><h3>Espacio</h3><div id="an-met-espacio" class="an-tarjetas"></div></section>
+      <section class="caja"><h3>Capacidad</h3><div id="an-cap-tipos"></div><div id="an-met-capacidad" class="an-tarjetas"></div></section>
+      <section class="caja"><h3>Movimiento</h3><div id="an-met-mov" class="an-tarjetas"></div></section>
+      <div id="an-nuevas"></div>
+      <section class="caja"><h3>Recomendaciones priorizadas</h3><div id="an-recs"></div></section>
+      <section class="caja"><h3>Escenarios (qué pasaría si…)</h3><div id="an-esc"></div></section>
+      <section class="caja" id="an-sens-caja">
+        <h3>Sensibilidad de parámetros</h3>
+        <p class="peq muted">¿Cuánto cambia el costo y la asignación si un parámetro del modelo varía ±50 %? Si casi no cambian, el resultado es <b>robusto</b> a esa suposición; si cambian mucho, conviene medirlo antes de decidir. Corre la asignación varias veces (tarda unos segundos). El criterio de «robusto» es propio <span class="verif">[PROPIO]</span>.</p>
+        <div class="fila-inp">
+          <button type="button" class="btn primario" id="an-sens-calc">Calcular sensibilidad</button>
+          <label class="inline"><input type="checkbox" id="an-sens-25"> incluir también ±25 %</label>
+          <span id="an-sens-estado" class="peq" role="status" aria-live="polite"></span>
+        </div>
+        <div id="an-sens-res"></div>
+      </section>
+      <section class="caja"><h3>Supuestos y advertencias</h3><div id="an-sup" class="peq"></div></section>
+    </div>
+  </div>
+</div>
+
+<!-- ====================== REPORTES ====================== -->
+<div id="area-reportes" class="pagina" hidden>
+  <div class="pagina-int">
+    <div class="pag-cab">
+      <h2>Reportes y guardado</h2>
+    </div>
+    <div class="grid-rep">
+      <section class="caja">
+        <h3>Descargas</h3>
+        <div class="col-btn">
+          <button type="button" class="btn" id="rep-csv-ubic">CSV de ubicaciones</button>
+          <button type="button" class="btn" id="rep-csv-art">CSV de artículos</button>
+          <button type="button" class="btn" id="rep-png">PNG del plano</button>
+          <button type="button" class="btn primario" id="rep-imprimir">Imprimir informe</button>
+        </div>
+        <p class="peq muted" id="rep-nota"></p>
+      </section>
+      <section class="caja">
+        <h3>Proyecto</h3>
+        <div class="col-btn">
+          <button type="button" class="btn" id="rep-guardar">Guardar proyecto (.json)</button>
+          <button type="button" class="btn" id="rep-abrir">Abrir proyecto (.json)</button>
+          <input type="file" id="inp-json" accept=".json,application/json" class="sr-input">
+        </div>
+        <p class="peq muted" id="rep-auto">El proyecto se autoguarda en este navegador.</p>
+      </section>
+    </div>
+    <article id="informe" aria-label="Informe imprimible"></article>
+  </div>
+</div>
+
+</main>
+
+<div id="avisos" role="log" aria-live="polite"></div>
+
+<dialog id="dlg" aria-labelledby="dlg-titulo">
+  <form method="dialog" id="dlg-form">
+    <h3 id="dlg-titulo"></h3>
+    <p id="dlg-texto"></p>
+    <div class="dlg-acc" id="dlg-acc"></div>
+  </form>
+</dialog>
+
+<script src="motor.js"></script>
+<script src="analisis.js"></script>
+<script src="app.js"></script>
+
+<footer class="aviso-privacidad" role="contentinfo">
+<style>
+.aviso-privacidad{max-width:1200px;margin:32px auto 0;padding:20px 16px 28px;font:400 13px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;opacity:.85;border-top:1px solid currentColor}
+.aviso-privacidad p{margin:0 0 8px}
+@media print{.aviso-privacidad{display:none}}
+</style>
+<p><strong>Privacidad.</strong> No hay servidor ni cuenta: tus planos, artículos y resultados se calculan y se guardan solo en este dispositivo (navegador). Nada se envía a internet.</p>
+<p><strong>Alcance.</strong> Es una propuesta orientativa basada en heurísticas, no un diseño certificado. Los anchos de pasillo, holguras, cargas y distancias de referencia son valores típicos que debes verificar con la ficha de tu equipo y con los profesionales competentes (protección contra incendios, estructural, seguridad y salud en el trabajo). El programa no afirma cumplimiento normativo.</p>
+</footer>
+<script src="registro-sw.js"></script>
+</body>
+</html>
