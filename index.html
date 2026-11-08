@@ -251,6 +251,21 @@
         </details>
       </section>
 
+      <section class="caja" id="caja-vdma">
+        <h3>Calcular ancho de pasillo (Ast = Wa + l6 + x + a)</h3>
+        <p class="peq muted">Ast = Wa + l6 + x + a. Sirve para comparar con el pasillo que usa el programa. Los datos de la <b>ficha del equipo</b> (radio de giro) y las holguras son <b>suyos</b>: el programa no inventa ninguno <span class="verif">[VERIFICAR con la norma VDMA 15173 / FEM 4.005 y la ficha del equipo]</span>. La forma de la fórmula viene de una guía de fabricante; <b>x es una medida del equipo</b> (en esa guía: distancia del centro de las ruedas delanteras a la cara de las horquillas), no una holgura contra el rack.</p>
+        <div class="rejilla2">
+          <label>Radio de giro Wa (m)<input type="number" id="v-wa" min="0" step="0.01" inputmode="decimal" placeholder="de la ficha del equipo" aria-describedby="v-ayuda-wa"></label>
+          <label>Largo de la carga l6 (m) <span class="verif">[VERIFICAR]</span><input type="number" id="v-l6" min="0" step="0.01" inputmode="decimal" value="1.2"></label>
+          <label>x (m): medida de la ficha del equipo<input type="number" id="v-x" min="0" step="0.01" inputmode="decimal" placeholder="dato suyo"></label>
+          <label>Holgura de seguridad a (m)<input type="number" id="v-a" min="0" step="0.01" inputmode="decimal" placeholder="dato suyo"></label>
+        </div>
+        <p class="peq muted" id="v-ayuda-wa">El radio de giro Wa está en la ficha técnica del equipo. 1,2 m para l6 es un valor típico de europalet [VERIFICAR]; cámbielo si su carga es otra. Para x use la cota de su ficha de equipo y para a su holgura de seguridad (puede ser 0): el programa no los supone. Al calcular verá la fuente y las limitaciones de la fórmula.</p>
+        <button type="button" class="btn primario" id="v-calcular">Calcular</button>
+        <div id="v-resultado" class="peq" role="status" aria-live="polite"></div>
+        <button type="button" class="btn" id="v-usar" hidden>Usar este ancho como pasillo del equipo</button>
+      </section>
+
       <section class="caja">
         <h3>Generar racks automáticamente</h3>
         <div class="rejilla2">
@@ -329,6 +344,8 @@
             <label>Alertar «por vencer» a los (días)<input type="number" id="a-dias-venc" min="0" max="3650" step="1" placeholder="dato suyo"></label>
           </div>
           <p class="peq muted dato-suyo">Fecha de referencia vacía = hoy (solo la pantalla lee el reloj; el motor recibe la fecha). Sin «días de alerta» solo se marcan los <b>vencidos</b>. Con pocos pedidos la afinidad es solo indicativa <span class="verif">[VERIFICAR]</span>.</p>
+          <label class="inline"><input type="checkbox" id="a-cant-combinar" checked> Combinar bahías contiguas en cantilever (mercadería larga)</label>
+          <p class="peq muted">Si una carga es más larga que una bahía, puede ocupar varias bahías seguidas del mismo rack y nivel; su peso se reparte entre los brazos <span class="verif">[VERIFICAR con la ficha del fabricante]</span>. Si la desmarca, esas cargas quedan sin ubicar.</p>
           <label class="inline"><input type="checkbox" id="a-seg-usar" checked> Segregación por clase de peligro entre racks <span class="verif">[VERIFICAR con HDS y seguridad-sst]</span></label>
           <details class="mini" id="seg-det"><summary>Ver / editar la matriz de segregación</summary><div id="seg-matriz"></div></details>
         </details>
@@ -344,6 +361,7 @@
           <label><input type="radio" name="vista" value="carga"> Carga por módulo (kg / capacidad)</label>
           <label><input type="radio" name="vista" value="nada"> Solo racks</label>
         </div>
+        <button type="button" class="btn" id="btn-3d-asignar" aria-haspopup="dialog">Vista 3D</button>
         <label class="inline capa-chk"><input type="checkbox" id="chk-capa-evac"> Capa: mapa de calor de evacuación</label>
         <p class="peq muted" id="capa-nota">La capa de evacuación sale del Análisis (distancia caminando a la salida de emergencia más cercana). Solo muestra valores: el límite es dato suyo <span class="verif">[VERIFICAR RNE A.130 / ITSE]</span>.</p>
       </section>
@@ -612,6 +630,7 @@
           <button type="button" class="btn" id="rep-csv-ubic">CSV de ubicaciones</button>
           <button type="button" class="btn" id="rep-csv-art">CSV de artículos</button>
           <button type="button" class="btn" id="rep-png">PNG del plano</button>
+          <button type="button" class="btn" id="rep-3d" aria-haspopup="dialog">Vista 3D</button>
           <button type="button" class="btn primario" id="rep-imprimir">Imprimir informe</button>
         </div>
         <p class="peq muted" id="rep-nota"></p>
@@ -624,6 +643,31 @@
           <input type="file" id="inp-json" accept=".json,application/json" class="sr-input">
         </div>
         <p class="peq muted" id="rep-auto">El proyecto se autoguarda en este navegador.</p>
+      </section>
+      <section class="caja" id="caja-compartir">
+        <h3>Compartir por enlace</h3>
+        <div id="comp-contenido">
+          <button type="button" class="btn" id="comp-copiar">Copiar enlace para compartir</button>
+          <div id="comp-estado" class="peq" role="status" aria-live="polite"></div>
+          <label class="sr" for="comp-texto">Enlace para compartir</label>
+          <textarea id="comp-texto" rows="3" readonly hidden spellcheck="false" aria-label="Enlace para compartir"></textarea>
+        </div>
+        <p class="peq muted" id="comp-nosoporta" hidden>Este navegador no puede preparar enlaces comprimidos. Usa «Guardar proyecto (.json)» y envía el archivo.</p>
+        <p class="peq muted">Privacidad: el enlace contiene tus datos dentro; quien lo tenga puede verlos. No incluye imagen del plano, logo ni resultados (se recalculan con «Asignar»). Sí incluye el nombre de la empresa y del autor, los artículos, los pedidos y los racks. No se envía a ningún servidor: va en la parte final de la dirección (#).</p>
+      </section>
+      <section class="caja" id="caja-marca">
+        <h3>Marca del informe</h3>
+        <div class="rejilla2">
+          <label>Empresa<input type="text" id="marca-empresa" maxlength="80" autocomplete="organization" placeholder="opcional"></label>
+          <label>Elaborado por<input type="text" id="marca-autor" maxlength="80" autocomplete="name" placeholder="opcional"></label>
+        </div>
+        <div class="fila-inp">
+          <label class="btn" for="marca-logo" id="marca-logo-lbl" tabindex="0">Subir logo (PNG, JPG o WEBP)</label>
+          <input type="file" id="marca-logo" accept="image/png,image/jpeg,image/webp" class="sr-input">
+          <button type="button" class="btn" id="marca-quitar" hidden>Quitar logo</button>
+        </div>
+        <div id="marca-vista" class="peq muted">Sin logo. La empresa, el autor y el logo aparecen en el encabezado del informe impreso; si están vacíos no aparece nada.</div>
+        <p class="peq muted">El logo se reduce a 320 px de ancho y se guarda en este navegador y en el archivo .json; no viaja en el enlace para compartir.</p>
       </section>
     </div>
     <article id="informe" aria-label="Informe imprimible"></article>
@@ -654,8 +698,32 @@
   </div>
 </dialog>
 
+<dialog id="dlg-3d" class="dlg-3d" aria-labelledby="d3-titulo">
+  <div class="d3-cab">
+    <h3 id="d3-titulo">Vista 3D</h3>
+    <label class="d3-sel">Colorear por
+      <select id="d3-color" aria-label="Colorear por">
+        <option value="abc">Clase ABC</option>
+        <option value="zona">Zona</option>
+        <option value="ocupacion">Ocupación</option>
+      </select>
+    </label>
+    <span class="d3-acc">
+      <button type="button" class="btn" id="d3-reiniciar">Restablecer vista</button>
+      <button type="button" class="btn" id="d3-png">PNG de esta vista</button>
+      <button type="button" class="btn primario" id="d3-cerrar">Cerrar</button>
+    </span>
+  </div>
+  <div class="d3-cuerpo"><canvas id="d3-canvas" tabindex="0" role="img" aria-label="Vista 3D del almacén. Arrastra para girar, rueda o pellizco para acercar. Flechas del teclado giran; más y menos acercan."></canvas></div>
+  <div id="d3-leyenda" class="d3-leyenda" aria-label="Leyenda de colores"></div>
+  <div id="d3-avisos" class="peq muted" role="status" aria-live="polite"></div>
+  <p class="peq muted d3-ayuda">Arrastra para girar · rueda o pellizco para acercar · Mayús + arrastrar o dos dedos para desplazar · flechas del teclado para girar, + y − para acercar · Esc cierra. Es una ilustración de lo calculado: las alturas de las cargas son las de cada artículo, o un 80 % de la altura libre si no la tiene.</p>
+</dialog>
+
 <script src="motor.js"></script>
 <script src="analisis.js"></script>
+<script src="vista3d.js"></script>
+<script src="compartir.js"></script>
 <script src="app.js"></script>
 
 <footer class="aviso-privacidad" role="contentinfo">

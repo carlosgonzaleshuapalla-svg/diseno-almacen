@@ -24,7 +24,7 @@
    * ==================================================================== */
 
   const EPS = 1e-9;
-  const VERSION_MOTOR = '1.1.0';
+  const VERSION_MOTOR = '1.2.0';
 
   /**
    * Ancho de pasillo típico por equipo (m): ORDEN DE MAGNITUD [VERIFICAR con la ficha del equipo]. El pasillo
@@ -293,7 +293,10 @@
       evacMaxM: null,                // límites DEL USUARIO: null = no afirmar cumplimiento
       anchoEvacuacionMin: null,
       cargaPisoMaxKgM2: null,
-      muelle: { palletsDiaRecepcion: null, palletsDiaDespacho: null, diasPermanenciaRec: 1, diasPermanenciaDesp: 1, m2PorPalet: null, factorManiobra: null }
+      muelle: { palletsDiaRecepcion: null, palletsDiaDespacho: null, diasPermanenciaRec: 1, diasPermanenciaDesp: 1, m2PorPalet: null, factorManiobra: null },
+      // ---- v1.2 ----
+      cantileverCombinar: true,      // true = una carga más larga que la bahía ocupa k bahías contiguas del mismo rack y nivel; false = comportamiento v1.1
+      pasilloVDMA: null              // null | {radioGiroM, largoCargaM, holguraCargaRackM, holguraSeguridadM}: datos del usuario para calcularPasilloVDMA
     };
   }
 
@@ -311,7 +314,8 @@
       config: configPorDefecto('apilador'),
       productos: [],
       pedidos: [],
-      resultado: null
+      resultado: null,
+      marca: { empresa: '', autor: '', logo: null }   // v1.2: marca del informe (opcional)
     };
   }
 
@@ -875,8 +879,12 @@
     return mejor;
   }
 
-  /** Dijkstra multi-fuente con montículo binario. Devuelve Float64Array de distancias (Infinity si inalcanzable). */
-  function dijkstraMalla(m, fuentes, distIni) {
+  /**
+   * Dijkstra multi-fuente con montículo binario. Devuelve Float64Array de distancias (Infinity si inalcanzable).
+   * v1.2: `objetivos` (opcional, índices de celda) detiene la búsqueda cuando todos quedaron fijados (las demás celdas
+   * quedan parciales: solo son válidas las de los objetivos); `info.pops` (opcional) acumula las celdas fijadas.
+   */
+  function dijkstraMalla(m, fuentes, distIni, objetivos, info) {
     const nx = m.nx, ny = m.ny, N = nx * ny, cam = m.caminable, c = m.celda;
     const dist = new Float64Array(N).fill(Infinity);
     let cap = 1024;
@@ -900,6 +908,7 @@
       if (d0 < dist[f]) { dist[f] = d0; empujar(d0, f); }
     }
     const diag = c * RAIZ2;
+    const pend = objetivos && objetivos.length ? new Set(objetivos) : null;
     while (hn > 0) {
       const k = hk[0], u = hv[0];
       hn--;
@@ -916,6 +925,8 @@
         hk[i] = lk; hv[i] = lv;
       }
       if (k > dist[u]) continue;
+      if (info) info.pops++;
+      if (pend && pend.delete(u) && pend.size === 0) break;
       const ux = u % nx, uy = (u - ux) / nx;
       for (let q = 0; q < 8; q++) {
         const vx = ux + DX8[q], vy = uy + DY8[q];
@@ -1136,7 +1147,24 @@
     ['palletsDiaRecepcion', 'palletsDiaDespacho', 'm2PorPalet', 'factorManiobra'].forEach(function (k) { mu[k] = typeof mu[k] === 'number' && isFinite(mu[k]) && mu[k] >= 0 ? mu[k] : null; });
     ['diasPermanenciaRec', 'diasPermanenciaDesp'].forEach(function (k) { mu[k] = typeof mu[k] === 'number' && isFinite(mu[k]) && mu[k] >= 0 ? mu[k] : 1; });
     cfg.muelle = mu;
+    // ---- v1.2 ----
+    cfg.cantileverCombinar = cr.cantileverCombinar !== false;
+    cfg.pasilloVDMA = normalizarPasilloVDMA(cr.pasilloVDMA);
     return cfg;
+  }
+
+  /** `config.pasilloVDMA` normalizado: null si no es un objeto con algún dato; cada campo = número finito ≥ 0 o null. */
+  function normalizarPasilloVDMA(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const out = {};
+    let alguno = false;
+    ['radioGiroM', 'largoCargaM', 'holguraCargaRackM', 'holguraSeguridadM'].forEach(function (k) {
+      const x = v[k];
+      const ok = typeof x === 'number' && isFinite(x) && x >= 0;
+      out[k] = ok ? x : null;
+      if (ok) alguno = true;
+    });
+    return alguno ? out : null;
   }
 
   /** Fecha ISO estricta 'YYYY-MM-DD' → ms UTC (sin leer el reloj); null si no es válida. */
@@ -1538,8 +1566,8 @@
     supuestos.push('Ancho de pasillo de trabajo ' + cfg.anchoPasillo + ' m (equipo «' + cfg.equipo + '»; orden de magnitud [VERIFICAR con la ficha del equipo]: el pasillo real = ancho del equipo + largo del palet + holguras, p. ej. VDMA 15173); pasillos de cruce de ' + cfg.anchoPasilloCruce + ' m cada ' + M + ' módulos; margen a muros/obstáculos ' + cfg.margenMuro + ' m; reserva libre de ' + reserva + ' m delante de cada puerta.');
     supuestos.push('Heurística de retícula con varios ángulos y fases: elige el candidato con más posiciones accesibles; no garantiza el óptimo de empaquetado.');
     supuestos.push('Las zonas especiales (frío, peligrosos, alto valor, cuarentena) no se excluyen: los racks pueden caer dentro de ellas. Los huecos, los racks manuales y las zonas de muelle y staging se tratan como obstáculos.');
-    if (tipo === 'piso') supuestos.push('Rack de piso (bloque): cada módulo es un CARRIL de ' + L + ' m de ancho y ' + redondear(tip.fondo, 2) + ' m de fondo (' + prof + ' palet(s) en profundidad × ' + apil + ' apilado(s) = ' + (prof * apil) + ' ubicaciones); lo ocupa UN solo SKU y es LIFO si hay profundidad o apilado > 1. Ancho de carril y 1,2 m por palet en profundidad son típicos [VERIFICAR]; no se verifica la altura total del apilado contra la nave ni la estabilidad de la carga.');
-    if (tipo === 'cantilever') supuestos.push('Cantilever: cada módulo es una BAHÍA de ' + L + ' m; los niveles son brazos de ' + tip.fondo + ' m cada ' + tip.altoNivel + ' m y la carga máxima (' + tip.carga + ' kg) se entiende POR BRAZO: valores típicos [VERIFICAR con la ficha del fabricante]. Un SKU entra si su largo (largoM) ≤ largo de la bahía; no se modela el cruce entre bahías contiguas.');
+    if (tipo === 'piso') supuestos.push('Rack de piso (bloque): cada módulo es un CARRIL de ' + L + ' m de ancho y ' + redondear(tip.fondo, 2) + ' m de fondo (' + prof + ' palet(s) en profundidad × ' + apil + ' apilado(s) = ' + (prof * apil) + ' ubicaciones); lo ocupa UN solo SKU y es LIFO si hay profundidad o apilado > 1. Ancho de carril y 1,2 m por palet en profundidad son típicos [VERIFICAR]; la altura del apilado (alto de la carga × apilado + holgura sobre la carga × (apilado − 1)) se verifica contra la altura libre de la nave menos la holgura a rociadores solo en los SKU que traen altoCargaM [VERIFICAR]; no se verifica la estabilidad de la carga.');
+    if (tipo === 'cantilever') supuestos.push('Cantilever: cada módulo es una BAHÍA de ' + L + ' m; los niveles son brazos de ' + tip.fondo + ' m cada ' + tip.altoNivel + ' m y la carga máxima (' + tip.carga + ' kg) se entiende POR BRAZO: valores típicos [VERIFICAR con la ficha del fabricante]. Un SKU entra si su largo (largoM) ≤ largo de la bahía; con `config.cantileverCombinar` (activa por defecto) una carga más larga ocupa k = ⌈largo / bahía⌉ bahías contiguas del mismo rack y nivel, repartiendo su peso entre ellas.');
     if (contorno.length < 3 || areaPoligono(contorno) <= 0) return vacio('El contorno no es válido (menos de 3 puntos o área 0): no se pueden generar racks.');
     if (!(L > 0) || !(tip.fondo > 0)) return vacio('Largo de módulo o fondo inválidos.');
     const bbG = bboxPoligono(contorno);
@@ -1784,6 +1812,9 @@
     return cfg.penalNivelPalet * (pos.nivel - 1);
   }
 
+  /** Altura (m) de un apilado de `a` cargas de alto `alto` con `holg` m entre cada par: a·alto + holg·(a−1). */
+  function alturaApilado(alto, a, holg) { return a * alto + holg * (a - 1); }
+
   /** Prepara todos los datos de la corrida de slotting (posiciones, productos, elegibilidad, costos). */
   function prepararEntrada(proyecto, opciones) {
     const cfg = configCompleta(proyecto);
@@ -1799,6 +1830,8 @@
       r.advertencias.forEach(function (a) { adv.push(a); });
     }
     const nPos = posList.length;
+    // v1.2: malla caminable para la distancia reserva → picking (misma malla y caché que las distancias a las puertas)
+    const mallaRepo = cfg.reposicion.activa === true && !(opciones && opciones.posiciones) ? camposDeDistancia(proyecto).malla : null;
     // racks (para incompatibilidad por distancia entre huellas de rack)
     const rackIdx = new Int32Array(nPos);
     const idPorRack = new Map();
@@ -1869,7 +1902,7 @@
         idx: i, sku: sku, descripcion: p.descripcion || '', familia: p.familia, fam: famId(p.familia),
         cantidad: cant, upu: upu, posReq: Math.max(0, ubicReq), ubicReq: Math.max(0, ubicReq), capMin: 1,
         picks: picks, picksEf: picksEf, ent: ent, wp: 0, we: 0,
-        pesoUbic: pesoUbic, alto: Math.max(0, num(p.altoCargaM, 0)), tipo: tipoP,
+        pesoUbic: pesoUbic, alto: Math.max(0, num(p.altoCargaM, 0)), altoDado: typeof p.altoCargaM === 'number' && isFinite(p.altoCargaM) && p.altoCargaM > 0, tipo: tipoP,
         zona: p.requiereZona || null,
         incompat: Array.isArray(p.incompatibleCon) ? p.incompatibleCon.map(String) : [],
         pesado: pesadoP, nivelMax: pesadoP ? (tipoP === 'bin' ? cfg.nivelMaxPesadoBin : cfg.nivelMaxPesado) : Infinity,
@@ -1923,6 +1956,52 @@
     // capacidad de cada ubicación (unidades de ubicación que caben; 1 salvo carriles de piso)
     const cap = new Int32Array(nPos);
     for (let j = 0; j < nPos; j++) cap[j] = Math.max(1, (posList[j].capacidadUb | 0) || 1);
+    // ---- v1.2: filas de cantilever (mismo rack, nivel y slot) para las cargas largas que ocupan k bahías contiguas ----
+    const combinar = cfg.cantileverCombinar !== false;
+    const hMaxNave = num(cfg.alturaLibreNave, Infinity) - num(cfg.holguraRociadores, 0);
+    let filaDe = null, modDe = null, filasPos = null;
+    if (combinar && posList.some(function (q) { return q.tipo === 'cantilever'; })) {
+      const rackConSlots = new Set();
+      posList.forEach(function (q, j) { if (q.tipo === 'cantilever' && (q.slot || 1) > 1) rackConSlots.add(rackIdx[j]); });
+      filaDe = new Int32Array(nPos).fill(-1); modDe = new Int32Array(nPos);
+      filasPos = [];
+      const idFila = new Map();
+      for (let j = 0; j < nPos; j++) {
+        const q = posList[j];
+        // solo racks con 1 posición por módulo: con varios slots por bahía no se modela el tramo
+        if (q.tipo !== 'cantilever' || !(q.anchoBahiaM > 0) || typeof q.modulo !== 'number' || q.modulo < 1 || rackConSlots.has(rackIdx[j])) continue;
+        const k = rackIdx[j] + ':' + q.nivel;
+        let f = idFila.get(k);
+        if (f === undefined) { f = filasPos.length; idFila.set(k, f); filasPos.push([]); }
+        const fila = filasPos[f];
+        while (fila.length < q.modulo) fila.push(-1);
+        fila[q.modulo - 1] = j;
+        filaDe[j] = f; modDe[j] = q.modulo - 1;
+      }
+    }
+    const cubFila = function (j, k) {
+      if (!filasPos || filaDe[j] < 0) return null;
+      const fila = filasPos[filaDe[j]], m0 = modDe[j], cub = [];
+      for (let t = 0; t < k; t++) { const c = fila[m0 + t]; if (c === undefined || c < 0) return null; cub.push(c); }
+      return cub;
+    };
+    // restricciones duras estáticas de un producto en UNA posición; kk = nº de bahías del tramo (el peso se reparte entre ellas)
+    const okEstatico = function (p, q, kk) {
+      if (q.tipo !== p.tipo) return false;
+      if (p.pesoUbic / kk > q.cargaMaxKg + 1e-9) return false;
+      if (p.alto > (q.alturaLibreM === undefined ? Infinity : q.alturaLibreM) + 1e-9) return false;
+      if (p.pesado && q.nivel > p.nivelMax) return false;
+      if (p.zona) { if (q.zonaTipo !== p.zona) return false; }
+      else if (ZONAS_RESTRINGIDAS.indexOf(q.zonaTipo) >= 0) return false;
+      if ((q.apilado || 1) > p.apilableMax) return false;
+      // v1.2: altura libre del apilado de piso (solo si el SKU trae altoCargaM; si no, no se verifica y se avisa)
+      if (q.tipo === 'piso' && p.altoDado && alturaApilado(p.alto, q.apilado || 1, cfg.holguraSobreCarga) > hMaxNave + 1e-9) return false;
+      if (p.fefo && q.lifo === true) return false;
+      if (!q.accesible) return false;
+      return true;
+    };
+    const algunCant = prods.some(function (p) { return p.tipo === 'cantilever' && p.largo !== null && !p.invalido; });
+    const spanK = filasPos && algunCant ? new Uint8Array(nProd * nPos) : null;
     // elegibilidad (restricciones duras estáticas)
     const elig = new Uint8Array(nProd * nPos);
     for (let i = 0; i < nProd; i++) {
@@ -1931,17 +2010,25 @@
       const base = i * nPos;
       for (let j = 0; j < nPos; j++) {
         const q = posList[j];
-        if (q.tipo !== p.tipo) continue;
-        if (p.pesoUbic > q.cargaMaxKg + 1e-9) continue;
-        if (p.alto > (q.alturaLibreM === undefined ? Infinity : q.alturaLibreM) + 1e-9) continue;
-        if (p.pesado && q.nivel > p.nivelMax) continue;
-        if (p.zona) { if (q.zonaTipo !== p.zona) continue; }
-        else if (ZONAS_RESTRINGIDAS.indexOf(q.zonaTipo) >= 0) continue;
-        if (q.tipo === 'cantilever' && (p.largo === null || p.largo > (q.anchoBahiaM === undefined || q.anchoBahiaM === null ? Infinity : q.anchoBahiaM) + 1e-9)) continue;
-        if ((q.apilado || 1) > p.apilableMax) continue;
-        if (p.fefo && q.lifo === true) continue;
-        if (!q.accesible) continue;
+        let kk = 1;
+        if (q.tipo === 'cantilever' && q.tipo === p.tipo) {
+          const bh = q.anchoBahiaM === undefined || q.anchoBahiaM === null ? Infinity : q.anchoBahiaM;
+          if (p.largo === null) continue;
+          if (p.largo > bh + 1e-9) {
+            // v1.2: la carga ocupa k bahías contiguas del mismo rack y nivel (todas deben cumplir las restricciones)
+            if (!combinar) continue;
+            kk = Math.max(2, Math.ceil(p.largo / bh - 1e-9));
+            if (kk > 200) continue;
+            const cub = cubFila(j, kk);
+            if (!cub) continue;
+            let todas = true;
+            for (let t = 1; t < cub.length && todas; t++) todas = okEstatico(p, posList[cub[t]], kk);
+            if (!todas) continue;
+          }
+        }
+        if (!okEstatico(p, q, kk)) continue;
         elig[base + j] = 1;
+        if (spanK && q.tipo === 'cantilever') spanK[base + j] = kk;
       }
       // posiciones necesarias = ⌈ubicaciones / capacidad⌉; con ubicaciones de distinta capacidad se usa la MENOR (conservador)
       let mn = Infinity, mx = 0;
@@ -1949,6 +2036,12 @@
       p.capMin = mn === Infinity ? 1 : mn;
       if (p.capMin > 1) p.posReq = Math.ceil(p.ubicReq / p.capMin - 1e-9);
       if (mx > mn && mn !== Infinity) adv.push('SKU «' + p.sku + '»: las posiciones elegibles tienen capacidades distintas (' + mn + ' a ' + mx + ' ubicaciones); se dimensiona con la menor (' + mn + ') para no quedarse corto.');
+    }
+    // v1.2: SKU de piso sin altoCargaM en un almacén con apilado > 1: la altura del apilado no se puede verificar
+    if (posList.some(function (q) { return q.tipo === 'piso' && (q.apilado || 1) > 1; })) {
+      prods.forEach(function (p) {
+        if (p.posReq > 0 && p.tipo === 'piso' && !p.altoDado) adv.push('[FALTA: altoCargaM] SKU «' + p.sku + '»: sin el alto de la carga no se verifica la altura del apilado en piso (alto × apilado frente a la altura libre bajo rociadores); no se inventa un valor.');
+      });
     }
     prods.forEach(function (p) {
       p.wp = p.posReq > 0 ? p.picksEf / p.posReq : 0;
@@ -2017,7 +2110,10 @@
       nFam: fams.size, hayIncompat: hayIncompat, advertencias: adv,
       cap: cap, modIdx: modIdx, modLim: modLim, hayModCap: hayModCap, afin: afin,
       repo: cfg.reposicion.activa === true, nPick: cfg.reposicion.posicionesPicking,
-      dimMax: dimMax, usarPico: usarPico, nCross: nCross, flujoCross: flujoCross, hayPeligro: conPeligro.length > 0
+      dimMax: dimMax, usarPico: usarPico, nCross: nCross, flujoCross: flujoCross, hayPeligro: conPeligro.length > 0,
+      // v1.2
+      combinar: combinar, hMaxNave: hMaxNave, spanK: spanK, filaDe: filaDe, modDe: modDe, filasPos: filasPos,
+      cacheCam: new Map(), trabajoCam: 0, malla: mallaRepo
     };
   }
 
@@ -2106,22 +2202,90 @@
     };
   }
 
+  /* ---- v1.2: tramos de cantilever (una carga larga sobre k bahías contiguas) ----
+   * Un reparto (`owner`) es un Int32Array posición → SKU. Si hay tramos, lleva adjuntos `spanLen` (k en la posición PRINCIPAL del
+   * tramo, 0 en las demás) y `spanPrin` (índice de la principal en TODAS las posiciones cubiertas por un tramo de k ≥ 2; −1 si no).
+   * La principal es la primera bahía del tramo: lleva el costo y los picks; las secundarias solo ocupan espacio. */
+
+  /** Reparto vacío (con los arreglos de tramos si la corrida puede tenerlos). */
+  function nuevoOwner(E) {
+    const o = new Int32Array(E.nPos).fill(-1);
+    if (E.spanK) { o.spanLen = new Uint8Array(E.nPos); o.spanPrin = new Int32Array(E.nPos).fill(-1); }
+    return o;
+  }
+  /** ¿La posición j está cubierta por un tramo de k ≥ 2 en este reparto? (principal o secundaria) */
+  function enTramo(owner, j) { return !!owner.spanPrin && owner.spanPrin[j] >= 0; }
+  /** ¿La posición j es una SECUNDARIA de un tramo (ocupada pero sin costo propio)? */
+  function esSecundaria(owner, j) { return !!owner.spanPrin && owner.spanPrin[j] >= 0 && owner.spanPrin[j] !== j; }
+  /** Bahías que ocupa el producto p si su principal es j (1 si no hay tramos). */
+  function kTramo(E, p, j) { return E.spanK ? (E.spanK[p * E.nPos + j] || 1) : 1; }
+  /** Posiciones que cubriría p con principal j (ordenadas por módulo), o null si alguna no existe. NO mira si están libres. */
+  function cubiertasDe(E, j, k) {
+    if (k <= 1) return [j];
+    if (!E.filasPos || E.filaDe[j] < 0) return null;
+    const fila = E.filasPos[E.filaDe[j]], m0 = E.modDe[j], cub = [];
+    for (let t = 0; t < k; t++) { const c = fila[m0 + t]; if (c === undefined || c < 0) return null; cub.push(c); }
+    return cub;
+  }
+  /** Posiciones que cubriría p en j si TODAS están libres y son elegibles; null si no se puede colocar ahí. */
+  function cubLibre(E, owner, p, j) {
+    if (owner[j] >= 0 || !E.elig[p * E.nPos + j]) return null;
+    const k = kTramo(E, p, j);
+    if (k <= 1) return [j];
+    const cub = cubiertasDe(E, j, k);
+    if (!cub) return null;
+    for (let t = 1; t < cub.length; t++) if (owner[cub[t]] >= 0) return null;
+    return cub;
+  }
+  /** Ocupa las posiciones `cub` con el producto p (cub[0] es la principal). */
+  function ocuparCub(owner, p, cub) {
+    for (let t = 0; t < cub.length; t++) owner[cub[t]] = p;
+    if (cub.length > 1 && owner.spanLen) {
+      owner.spanLen[cub[0]] = cub.length;
+      for (let t = 0; t < cub.length; t++) owner.spanPrin[cub[t]] = cub[0];
+    }
+  }
+  /** Posiciones cubiertas por el tramo cuya principal es j en este reparto (o [j] si no es un tramo). */
+  function cubDeReparto(E, owner, j) {
+    const k = owner.spanLen ? owner.spanLen[j] : 0;
+    return k > 1 ? cubiertasDe(E, j, k) || [j] : [j];
+  }
+
   /** Carga acumulada por módulo (rack + índice de módulo) frente a su `cargaMaxModuloKg` (si el usuario la dio). */
   function crearCargaModulo(E) {
     const activo = E.hayModCap;
     const carga = activo ? new Float64Array(E.modLim.length) : null;
-    const w = function (p, j) { return E.prods[p].pesoUbic * E.cap[j]; };
+    // en un tramo de k bahías, el peso de la carga se reparte por igual entre los módulos que cubre
+    const w = function (p, j, n) { return (E.prods[p].pesoUbic * E.cap[j]) / (n || 1); };
+    const aplicar = function (p, j, cub, signo) {
+      if (cub && cub.length > 1) { for (let t = 0; t < cub.length; t++) carga[E.modIdx[cub[t]]] += signo * w(p, cub[t], cub.length); }
+      else carga[E.modIdx[j]] += signo * w(p, j, 1);
+    };
     return {
       activo: activo,
-      poner: function (p, j) { if (activo) carga[E.modIdx[j]] += w(p, j); },
-      quitar: function (p, j) { if (activo) carga[E.modIdx[j]] -= w(p, j); },
-      okPoner: function (p, j) {
+      poner: function (p, j, cub) { if (activo) aplicar(p, j, cub, 1); },
+      quitar: function (p, j, cub) { if (activo) aplicar(p, j, cub, -1); },
+      okPoner: function (p, j, cub) {
         if (!activo) return true;
+        if (cub && cub.length > 1) {
+          // los módulos cubiertos son distintos entre sí: se comprueba cada uno
+          for (let t = 0; t < cub.length; t++) { const m = E.modIdx[cub[t]]; if (carga[m] + w(p, cub[t], cub.length) > E.modLim[m] + 1e-9) return false; }
+          return true;
+        }
         const m = E.modIdx[j];
-        return carga[m] + w(p, j) <= E.modLim[m] + 1e-9;
+        return carga[m] + w(p, j, 1) <= E.modLim[m] + 1e-9;
       },
       carga: function (m) { return activo ? carga[m] : 0; }
     };
+  }
+
+  /** Carga el estado de incompatibilidades y de carga por módulo a partir de un reparto ya hecho (con tramos de cantilever). */
+  function cargarEstado(E, owner, inc, mod) {
+    for (let j = 0; j < E.nPos; j++) {
+      if (owner[j] < 0) continue;
+      inc.poner(owner[j], j);
+      if (!esSecundaria(owner, j)) mod.poner(owner[j], j, cubDeReparto(E, owner, j));
+    }
   }
 
   const AFIN_RADIO_M = 6;       // m: «cerca» para la bonificación de afinidad (igual que la de familia)
@@ -2232,7 +2396,7 @@
     const af = crearAfinidad(E);
     for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) { af.agregar(E.prods[owner[j]].fam, j); if (afs) afs.agregar(owner[j], j); }
     const colocadas = new Int32Array(E.nProd);
-    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) colocadas[owner[j]]++;
+    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0 && !esSecundaria(owner, j)) colocadas[owner[j]]++;   // unidades (un tramo = 1)
     for (let oi = 0; oi < E.orden.length; oi++) {
       const p = E.orden[oi];
       const pr = E.prods[p];
@@ -2242,11 +2406,14 @@
       const base = p * E.nPos;
       const afP = afs && afs.tiene(p);
       const cands = [];
+      const cubMap = E.spanK ? new Map() : null;   // principal → posiciones del tramo (solo k ≥ 2)
       for (let j = 0; j < E.nPos; j++) {
-        if (owner[j] >= 0 || !E.elig[base + j]) continue;
+        const cub = cubLibre(E, owner, p, j);
+        if (!cub) continue;
         if (bloq && bloq[E.rackIdx[j]]) continue;
-        if (mod.activo && !mod.okPoner(p, j)) continue;
+        if (mod.activo && !mod.okPoner(p, j, cub)) continue;
         cands.push(j);
+        if (cubMap && cub.length > 1) cubMap.set(j, cub);
       }
       if (!cands.length) continue;
       // semilla: menor costo (con bonificación de afinidad por pedidos si la hay)
@@ -2257,7 +2424,8 @@
         if (c < sc - 1e-12) { sc = c; seed = cands[k]; }
       }
       const elegidas = [seed];
-      mod.poner(p, seed);
+      const tomadas = new Set(cubMap && cubMap.get(seed) ? cubMap.get(seed) : [seed]);
+      mod.poner(p, seed, cubMap ? cubMap.get(seed) : null);
       if (faltan > 1 && cands.length > 1) {
         const sp = E.pos[seed];
         const llaves = new Float64Array(cands.length);
@@ -2276,22 +2444,80 @@
         for (let k = 0; k < idx.length && elegidas.length < faltan; k++) {
           const j = cands[idx[k]];
           if (j === seed) continue;
-          if (mod.activo && !mod.okPoner(p, j)) continue;
+          const cj = cubMap ? cubMap.get(j) || null : null;
+          // un tramo no puede solaparse con otro ya elegido en esta misma pasada
+          if (cj ? cj.some(function (c) { return tomadas.has(c); }) : tomadas.has(j)) continue;
+          if (mod.activo && !mod.okPoner(p, j, cj)) continue;
           elegidas.push(j);
-          mod.poner(p, j);
+          (cj || [j]).forEach(function (c) { tomadas.add(c); });
+          mod.poner(p, j, cj);
         }
       }
       for (let k = 0; k < elegidas.length; k++) {
         const j = elegidas[k];
-        owner[j] = p;
-        inc.poner(p, j);
-        af.agregar(pr.fam, j);
-        if (afs) afs.agregar(p, j);
+        const cub = cubMap && cubMap.get(j) ? cubMap.get(j) : [j];
+        ocuparCub(owner, p, cub);
+        for (let t = 0; t < cub.length; t++) {
+          inc.poner(p, cub[t]);
+          af.agregar(pr.fam, cub[t]);
+          if (afs) afs.agregar(p, cub[t]);
+        }
       }
       colocadas[p] += elegidas.length;
     }
     return colocadas;
   }
+
+  /* ---- v1.2: distancia CAMINADA entre puntos de acceso (reposición reserva → picking) ---- */
+  const TOPE_TRABAJO_CAM = 20000000;   // celdas fijadas por Dijkstra en toda la corrida (presupuesto de trabajo, no de reloj: reproducible)
+
+  /**
+   * Distancias caminando (m) desde el punto de acceso A hasta cada punto B de `Bs`, sobre la MISMA malla caminable del resto del
+   * motor (Dijkstra con parada anticipada al fijar todos los destinos; se guarda en E.cacheCam por par de puntos).
+   * Devuelve {d:[…], causa:[…]}: d[i] = Infinity cuando no hay distancia caminada y causa[i] ∈ 'sin_malla' | 'no_alcanzable' |
+   * 'presupuesto' (el llamador usa entonces la línea recta como respaldo y lo avisa).
+   */
+  function caminadasDesde(E, A, Bs) {
+    const d = new Array(Bs.length).fill(Infinity), causa = new Array(Bs.length).fill(null);
+    const key = function (P) { return P[0] + ',' + P[1]; };
+    const faltan = [];
+    for (let i = 0; i < Bs.length; i++) {
+      if (A[0] === Bs[i][0] && A[1] === Bs[i][1]) { d[i] = 0; continue; }
+      const k = key(A) + '|' + key(Bs[i]);
+      const c = E.cacheCam.get(k);
+      if (c !== undefined) { d[i] = c; if (!isFinite(c)) causa[i] = 'no_alcanzable'; continue; }
+      faltan.push(i);
+    }
+    if (!faltan.length) return { d: d, causa: causa };
+    const m = E.malla;
+    if (!m || !m.nx) { faltan.forEach(function (i) { causa[i] = 'sin_malla'; }); return { d: d, causa: causa }; }
+    if (E.trabajoCam >= TOPE_TRABAJO_CAM) { faltan.forEach(function (i) { causa[i] = 'presupuesto'; }); return { d: d, causa: causa }; }
+    const ccA = celdaCaminableCercana(m, A[0], A[1], m.celda * 1.0 + 1e-9);
+    const ccB = faltan.map(function (i) { return celdaCaminableCercana(m, Bs[i][0], Bs[i][1], m.celda * 1.0 + 1e-9); });
+    let dist = null;
+    const objetivos = [];
+    ccB.forEach(function (c) { if (c) objetivos.push(c.idx); });
+    if (ccA && objetivos.length) {
+      const info = { pops: 0 };
+      dist = dijkstraMalla(m, [ccA.idx], [ccA.d], objetivos, info);
+      E.trabajoCam += info.pops;
+    }
+    faltan.forEach(function (i, t) {
+      const c = ccB[t];
+      let v = Infinity;
+      if (ccA && c) {
+        if (c.idx === ccA.idx) v = Math.hypot(A[0] - Bs[i][0], A[1] - Bs[i][1]);
+        else if (isFinite(dist[c.idx])) v = dist[c.idx] + c.d;
+      }
+      d[i] = v;
+      if (!isFinite(v)) causa[i] = 'no_alcanzable';
+      E.cacheCam.set(key(A) + '|' + key(Bs[i]), v);
+    });
+    return { d: d, causa: causa };
+  }
+
+  /** Punto de acceso (en el pasillo) de una posición; el centro si no lo trae. */
+  function puntoAcceso(q) { return [q.ax !== undefined ? q.ax : q.cx, q.ay !== undefined ? q.ay : q.cy]; }
 
   /**
    * Construcción con modo picking/reserva (config.reposicion.activa), en dos fases:
@@ -2319,17 +2545,18 @@
       const bloq = inc.activo ? inc.bloqueados(p) : null;
       const base = p * nPos;
       for (let t = 0; t < nP; t++) {
-        let mejor = -1, mc = Infinity, mflag = 2;
+        let mejor = -1, mc = Infinity, mflag = 2, mcub = null;
         for (let j = 0; j < nPos; j++) {
-          if (owner[j] >= 0 || !E.elig[base + j]) continue;
+          const cub = cubLibre(E, owner, p, j);
+          if (!cub) continue;
           if (bloq && bloq[E.rackIdx[j]]) continue;
-          if (mod.activo && !mod.okPoner(p, j)) continue;
+          if (mod.activo && !mod.okPoner(p, j, cub)) continue;
           const flag = E.penal[j] > 0 ? 1 : 0;
           const c = E.pos[j].dDesp;
-          if (flag < mflag || (flag === mflag && c < mc - 1e-12)) { mejor = j; mc = c; mflag = flag; }
+          if (flag < mflag || (flag === mflag && c < mc - 1e-12)) { mejor = j; mc = c; mflag = flag; mcub = cub; }
         }
         if (mejor < 0) break;
-        owner[mejor] = p; inc.poner(p, mejor); mod.poner(p, mejor);
+        ocuparCub(owner, p, mcub); mcub.forEach(function (c) { inc.poner(p, c); }); mod.poner(p, mejor, mcub);
         picksPos[p].push(mejor);
       }
     }
@@ -2343,8 +2570,8 @@
       if (faltan <= 0) continue;
       const bloq = inc.activo ? inc.bloqueados(p) : null;
       const base = p * nPos;
-      const P0 = E.pos[picksPos[p][0]];
-      const ax0 = P0.ax !== undefined ? P0.ax : P0.cx, ay0 = P0.ay !== undefined ? P0.ay : P0.cy;
+      const P0 = puntoAcceso(E.pos[picksPos[p][0]]);
+      const ax0 = P0[0], ay0 = P0[1];
       const cands = [], llaves = [];
       for (let j = 0; j < nPos; j++) {
         if (owner[j] >= 0 || !E.elig[base + j]) continue;
@@ -2355,11 +2582,24 @@
       }
       const idx = cands.map(function (c, k) { return k; });
       idx.sort(function (a, b) { return llaves[a] - llaves[b] || cands[a] - cands[b]; });
+      // v1.2: la cercanía se mide CAMINANDO. La recta es cota inferior de la caminada: se re-ordena con la distancia caminada
+      // una ventana de los mejores candidatos por recta (faltan·3 + 30 [PROPIO]); el resto queda después, ordenado por recta.
+      const ventana = Math.min(idx.length, faltan * 3 + 30);
+      if (E.malla && ventana > 0) {
+        const win = idx.slice(0, ventana);
+        const cam = caminadasDesde(E, P0, win.map(function (k) { return puntoAcceso(E.pos[cands[k]]); }));
+        const claveW = new Map();
+        win.forEach(function (k, t) { claveW.set(k, isFinite(cam.d[t]) ? 2 * cam.d[t] + E.penal[cands[k]] : llaves[k]); });
+        const ordW = win.slice().sort(function (a, b) { return claveW.get(a) - claveW.get(b) || cands[a] - cands[b]; });
+        for (let t = 0; t < ventana; t++) idx[t] = ordW[t];
+      }
       let puestas = 0;
       for (let k = 0; k < idx.length && puestas < faltan; k++) {
         const j = cands[idx[k]];
-        if (mod.activo && !mod.okPoner(p, j)) continue;
-        owner[j] = p; inc.poner(p, j); mod.poner(p, j);
+        const cub = cubLibre(E, owner, p, j);
+        if (!cub) continue;
+        if (mod.activo && !mod.okPoner(p, j, cub)) continue;
+        ocuparCub(owner, p, cub); cub.forEach(function (c) { inc.poner(p, c); }); mod.poner(p, j, cub);
         puestas++;
       }
     }
@@ -2372,6 +2612,7 @@
    */
   function mejoraLocal(E, owner, inc, pasadas, semilla, tope, mod, afs) {
     const nPos = E.nPos, cm = E.cm, elig = E.elig, rk = E.rackIdx, cap = E.cap;
+    const sp = owner.spanPrin || null, spK = E.spanK || null;   // v1.2: los tramos de cantilever no se mueven ni se intercambian
     let evals = 0, movs = 0, cortado = false;
     for (let pas = 0; pas < pasadas; pas++) {
       const ocup = [];
@@ -2383,18 +2624,21 @@
       for (let oi = 0; oi < ocup.length; oi++) {
         const a = ocup[oi];
         const p = owner[a];
-        if (p < 0) continue;
+        if (p < 0 || (sp && sp[a] >= 0)) continue;
         const bp = p * nPos;
         const cA = cm[bp + a];
         let mejorDelta = -1e-9, mejorB = -1;
         for (let b = 0; b < nPos; b++) {
           if (b === a || !elig[bp + b]) continue;
           if (cap[b] !== cap[a]) continue;   // intercambiar ubicaciones de distinta capacidad cambiaría la cobertura del SKU
+          if (spK && spK[bp + b] >= 2) continue;   // b sería el inicio de un tramo de k bahías: no cabe un solo hueco
+          if (sp && sp[b] >= 0) continue;          // b pertenece a un tramo de otro SKU
           const q = owner[b];
           let delta;
           if (q < 0) delta = cm[bp + b] - cA;
           else {
             if (q === p || !elig[q * nPos + a]) continue;
+            if (spK && spK[q * nPos + a] >= 2) continue;
             delta = cm[bp + b] + cm[q * nPos + a] - cA - cm[q * nPos + b];
           }
           if (delta < mejorDelta) {
@@ -2459,20 +2703,20 @@
 
   /** Reparto «sin criterio»: SKU en el orden de ingreso sobre posiciones numeradas (respeta restricciones duras). */
   function repartoBaseline(E) {
-    const owner = new Int32Array(E.nPos).fill(-1);
+    const owner = nuevoOwner(E);
     const inc = crearIncompat(E);
     const mod = crearCargaModulo(E);
     for (let p = 0; p < E.nProd; p++) {
       const pr = E.prods[p];
       if (pr.posReq <= 0) continue;
       const bloq = inc.activo ? inc.bloqueados(p) : null;
-      const base = p * E.nPos;
       let faltan = pr.posReq;
       for (let j = 0; j < E.nPos && faltan > 0; j++) {
-        if (owner[j] >= 0 || !E.elig[base + j]) continue;
+        const cub = cubLibre(E, owner, p, j);
+        if (!cub) continue;
         if (bloq && bloq[E.rackIdx[j]]) continue;
-        if (mod.activo && !mod.okPoner(p, j)) continue;
-        owner[j] = p; inc.poner(p, j); mod.poner(p, j); faltan--;
+        if (mod.activo && !mod.okPoner(p, j, cub)) continue;
+        ocuparCub(owner, p, cub); cub.forEach(function (c) { inc.poner(p, c); }); mod.poner(p, j, cub); faltan--;
       }
     }
     return owner;
@@ -2492,8 +2736,9 @@
     const reposJ = new Float64Array(E.nPos), distJ = new Float64Array(E.nPos);
     const porProd = [];
     for (let p = 0; p < E.nProd; p++) porProd.push([]);
-    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) porProd[owner[j]].push(j);
-    let reposTot = 0, reposDist = 0, skusConPicking = 0, sinUpl = 0;
+    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0 && !esSecundaria(owner, j)) porProd[owner[j]].push(j);   // v1.2: un tramo cuenta por su principal
+    let reposTot = 0, reposDist = 0, skusConPicking = 0, sinUpl = 0, nCam = 0;
+    const respaldo = { sin_malla: 0, no_alcanzable: 0, presupuesto: 0 };
     for (let p = 0; p < E.nProd; p++) {
       const pr = E.prods[p], ps = porProd[p];
       if (pr.posReq <= 1 || !ps.length) continue;
@@ -2511,29 +2756,39 @@
       if (pr.upl === null) sinUpl++;
       const repos = (pr.picksEf * (pr.upl === null ? 1 : pr.upl)) / pr.upu;
       const rj = repos / res.length;
-      res.forEach(function (j) {
-        const q = E.pos[j];
-        const ax = q.ax !== undefined ? q.ax : q.cx, ay = q.ay !== undefined ? q.ay : q.cy;
-        let d = Infinity;
-        picks.forEach(function (k) {
-          const o = E.pos[k];
-          const bx = o.ax !== undefined ? o.ax : o.cx, by = o.ay !== undefined ? o.ay : o.cy;
-          const dd = Math.hypot(ax - bx, ay - by);
-          if (dd < d) d = dd;
-        });
+      // v1.2: distancia CAMINADA reserva → picking (mínima entre las posiciones de picking); si no existe, línea recta de respaldo
+      const resPts = res.map(function (j) { return puntoAcceso(E.pos[j]); });
+      const dCam = new Array(res.length).fill(Infinity), causa = new Array(res.length).fill(null);
+      picks.forEach(function (k) {
+        const cam = caminadasDesde(E, puntoAcceso(E.pos[k]), resPts);
+        for (let i = 0; i < res.length; i++) {
+          if (cam.d[i] < dCam[i]) dCam[i] = cam.d[i];
+          else if (!isFinite(cam.d[i]) && causa[i] === null) causa[i] = cam.causa[i] || 'no_alcanzable';
+        }
+      });
+      res.forEach(function (j, i) {
+        const A = resPts[i];
+        let d = dCam[i];
+        if (isFinite(d)) nCam++;
+        else {
+          d = Infinity;
+          picks.forEach(function (k) { const B = puntoAcceso(E.pos[k]); const dd = Math.hypot(A[0] - B[0], A[1] - B[1]); if (dd < d) d = dd; });
+          respaldo[causa[i] || 'no_alcanzable']++;
+        }
         reposJ[j] = rj; distJ[j] = d;
         reposTot += rj; reposDist += rj * d;
       });
     }
-    return { rol: rol, dividido: dividido, nPickEf: nPickEf, reposJ: reposJ, distJ: distJ, reposTot: reposTot, reposDist: reposDist, skusConPicking: skusConPicking, sinUpl: sinUpl };
+    return { rol: rol, dividido: dividido, nPickEf: nPickEf, reposJ: reposJ, distJ: distJ, reposTot: reposTot, reposDist: reposDist, skusConPicking: skusConPicking, sinUpl: sinUpl,
+      nCaminada: nCam, respaldo: respaldo, nRespaldo: respaldo.sin_malla + respaldo.no_alcanzable + respaldo.presupuesto };
   }
 
   /** Estadísticas de un reparto: costo, distancia ponderada, por producto y por clase. */
   function estadisticasReparto(E, owner) {
     const porProd = [];
-    for (let p = 0; p < E.nProd; p++) porProd.push({ pos: [], costo: 0, dsum: 0 });
+    for (let p = 0; p < E.nProd; p++) porProd.push({ pos: [], costo: 0, dsum: 0, nPrin: 0 });
     let costo = 0, wpSum = 0, wdSum = 0, ocupadas = 0, a1 = 0, aTot = 0;
-    const cls = { A: { skus: 0, posiciones: 0, wp: 0, wd: 0, dsum: 0 }, B: { skus: 0, posiciones: 0, wp: 0, wd: 0, dsum: 0 }, C: { skus: 0, posiciones: 0, wp: 0, wd: 0, dsum: 0 } };
+    const cls = { A: { skus: 0, posiciones: 0, wp: 0, wd: 0, dsum: 0, np: 0 }, B: { skus: 0, posiciones: 0, wp: 0, wd: 0, dsum: 0, np: 0 }, C: { skus: 0, posiciones: 0, wp: 0, wd: 0, dsum: 0, np: 0 } };
     E.prods.forEach(function (pr) { if (pr.posReq > 0) cls[pr.clase].skus++; });
     const roles = E.repo ? rolesReparto(E, owner) : null;
     const rec = E.cfg.pesoRecepcion;
@@ -2541,6 +2796,8 @@
       const p = owner[j];
       if (p < 0) continue;
       const pr = E.prods[p], q = E.pos[j];
+      // v1.2: una posición SECUNDARIA de un tramo de cantilever ocupa espacio pero no lleva costo, picks ni distancia propios (los lleva la principal)
+      if (esSecundaria(owner, j)) { ocupadas++; porProd[p].pos.push(j); cls[pr.clase].posiciones++; continue; }
       let c, wpj = pr.wp;
       if (roles && roles.dividido[p]) {
         const dd0 = q.dDesp, dr0 = q.dRec;
@@ -2555,29 +2812,44 @@
       } else c = E.cm[p * E.nPos + j];
       ocupadas++;
       porProd[p].pos.push(j);
+      porProd[p].nPrin++;
       porProd[p].costo += isFinite(c) ? c : 0;
       porProd[p].dsum += isFinite(q.dDesp) ? q.dDesp : 0;
       if (isFinite(c)) costo += c;
       const dd = isFinite(q.dDesp) ? q.dDesp : 0;
       wpSum += wpj; wdSum += wpj * dd;
       const k = cls[pr.clase];
-      k.posiciones++; k.wp += wpj; k.wd += wpj * dd; k.dsum += dd;
+      k.posiciones++; k.np++; k.wp += wpj; k.wd += wpj * dd; k.dsum += dd;
       if (pr.clase === 'A') { aTot += wpj; if (q.nivel === 1) a1 += wpj; }
     }
     return { costo: costo, wpSum: wpSum, wdSum: wdSum, ocupadas: ocupadas, porProd: porProd, cls: cls, a1Pct: aTot > 0 ? (100 * a1) / aTot : 0, roles: roles };
+  }
+
+  /** v1.2: bahías de cantilever que ocuparía la carga del producto `pr` con principal en la posición q (1 si cabe en una bahía o no se combina). */
+  function kPorLargo(E, pr, q) {
+    if (q.tipo !== 'cantilever' || pr.largo === null || !E.combinar || !(q.anchoBahiaM > 0) || pr.largo <= q.anchoBahiaM + 1e-9) return 1;
+    return Math.max(2, Math.ceil(pr.largo / q.anchoBahiaM - 1e-9));
   }
 
   /** Motivo por el cual un SKU no puede ubicarse (cascada de filtros duros). */
   function motivoFalta(E, p, owner, bloq, faltan, mod) {
     const pr = E.prods[p];
     let n = 0;
+    const kPos = function (q) { return kPorLargo(E, pr, q); };
     const f = [function (q) { return q.tipo === pr.tipo; },
-      function (q) { return pr.pesoUbic <= q.cargaMaxKg + 1e-9; },
+      function (q) { return pr.pesoUbic / kPos(q) <= q.cargaMaxKg + 1e-9; },
       function (q) { return pr.alto <= (q.alturaLibreM === undefined ? Infinity : q.alturaLibreM) + 1e-9; },
       function (q) { return pr.zona ? q.zonaTipo === pr.zona : ZONAS_RESTRINGIDAS.indexOf(q.zonaTipo) < 0; },
       function (q) { return !pr.pesado || q.nivel <= pr.nivelMax; },
       function (q) { return (q.apilado || 1) <= pr.apilableMax; },
-      function (q) { return q.tipo !== 'cantilever' || (pr.largo !== null && pr.largo <= (q.anchoBahiaM === undefined || q.anchoBahiaM === null ? Infinity : q.anchoBahiaM) + 1e-9); },
+      function (q) { return q.tipo !== 'piso' || !pr.altoDado || alturaApilado(pr.alto, q.apilado || 1, E.cfg.holguraSobreCarga) <= E.hMaxNave + 1e-9; },
+      function (q, j) {
+        if (q.tipo !== 'cantilever') return true;
+        if (pr.largo === null) return false;
+        const k = kPos(q);
+        if (k <= 1) return pr.largo <= (q.anchoBahiaM === undefined || q.anchoBahiaM === null ? Infinity : q.anchoBahiaM) + 1e-9;
+        return !!cubiertasDe(E, j, k);   // ¿existen k bahías contiguas desde esta posición?
+      },
       function (q) { return !(pr.fefo && q.lifo === true); },
       function (q) { return !!q.accesible; }];
     const nombres = [
@@ -2587,37 +2859,60 @@
       ['zona', pr.zona ? 'No hay posiciones dentro de una zona «' + pr.zona + '».' : 'Solo quedan posiciones en zonas reservadas (frío, peligrosos, alto valor, cuarentena).'],
       ['nivel_pesado', 'Carga pesada (' + redondear(pr.pesoUbic, 1) + ' kg por ubicación): solo puede ir hasta el nivel ' + pr.nivelMax + ' y no quedan posiciones así.'],
       ['apilado', 'La carga solo se puede apilar ' + pr.apilableMax + ' palet(s) (apilableMax) y las posiciones compatibles piden más apilado.'],
-      ['largo', pr.largo === null ? 'Falta el largo de la carga (largoM) para ubicarla en cantilever.' : 'La carga mide ' + pr.largo + ' m de largo y ninguna bahía de cantilever lo admite.'],
+      ['altura_apilado', ''],
+      ['largo', pr.largo === null ? 'Falta el largo de la carga (largoM) para ubicarla en cantilever.' : (E.combinar ? 'La carga mide ' + pr.largo + ' m de largo y no hay ' + 'bahías contiguas suficientes en ningún rack de cantilever (se combinan bahías contiguas del mismo rack y nivel hasta el máximo de módulos del rack).' : 'La carga mide ' + pr.largo + ' m de largo y ninguna bahía de cantilever lo admite (la combinación de bahías contiguas está desactivada: config.cantileverCombinar = false).')],
       ['fefo_lifo', 'El SKU sale por vencimiento (FEFO) y solo quedan ubicaciones LIFO (carriles profundos o apilados).'],
       ['inaccesible', 'Las posiciones compatibles no son accesibles desde las puertas.']
     ];
     let cur = E.pos.map(function (q, j) { return j; });
     for (let k = 0; k < f.length; k++) {
       const antes = cur.length;
-      cur = cur.filter(function (j) { return f[k](E.pos[j]); });
+      const previos = cur;
+      cur = cur.filter(function (j) { return f[k](E.pos[j], j); });
       n = cur.length;
-      if (n === 0) return { motivo: nombres[k][0], detalle: nombres[k][1] };
+      if (n === 0) {
+        if (nombres[k][0] === 'altura_apilado') {
+          // con los números: el apilado MÍNIMO entre las posiciones de piso que pasaron los filtros previos
+          let aMin = Infinity;
+          previos.forEach(function (j) { const q = E.pos[j]; if (q.tipo === 'piso') aMin = Math.min(aMin, q.apilado || 1); });
+          const h = alturaApilado(pr.alto, aMin, E.cfg.holguraSobreCarga);
+          return { motivo: 'altura_apilado', detalle: 'Apilar ' + aMin + ' (mínimo disponible) cargas de ' + redondear(pr.alto, 2) + ' m con ' + E.cfg.holguraSobreCarga + ' m de holgura entre ellas da ' + redondear(h, 2) + ' m y la altura libre de la nave menos la holgura a rociadores es ' + redondear(E.hMaxNave, 2) + ' m (altura × apilado + holgura × (apilado − 1) ≤ altura libre − holgura a rociadores) [VERIFICAR NFPA 13 / RNE A.130].' };
+        }
+        return { motivo: nombres[k][0], detalle: nombres[k][1] };
+      }
       // la restricción de nivel de las cargas pesadas es lo que deja corto al SKU
       if (nombres[k][0] === 'nivel_pesado' && n < pr.posReq && antes >= pr.posReq) return { motivo: 'nivel_pesado', detalle: nombres[k][1] + ' Quedan ' + n + ' posiciones de nivel permitido y se necesitan ' + pr.posReq + '.' };
     }
-    const libres = cur.filter(function (j) { return owner[j] < 0; });
+    // v1.2: solo cuentan las posiciones desde las que el SKU realmente puede colocarse (en un tramo, además deben cumplir las k bahías)
+    const elegibles = cur.filter(function (j) { return E.elig[p * E.nPos + j]; });
+    if (pr.tipo === 'cantilever') {
+      if (!elegibles.length) return { motivo: 'largo', detalle: nombres[7][1] + ' Además las bahías contiguas deben cumplir peso, altura, zona y accesibilidad.' };
+      cur = elegibles; n = cur.length;
+    }
+    const libres = cur.filter(function (j) {
+      const cub = cubiertasDe(E, j, kTramo(E, p, j));
+      return !!cub && cub.every(function (c) { return owner[c] < 0; });
+    });
     const libresOk = bloq ? libres.filter(function (j) { return !bloq[E.rackIdx[j]]; }) : libres;
     if (libres.length >= faltan && libresOk.length < faltan) {
       return { motivo: 'incompatibilidad', detalle: 'Hay espacio, pero está a menos de ' + E.cfg.separacionIncompatibles + ' m de familias incompatibles o de clases de peligro que deben segregarse (o en el mismo rack).' };
     }
     if (mod && mod.activo) {
-      const libresMod = libresOk.filter(function (j) { return mod.okPoner(p, j); });
+      const libresMod = libresOk.filter(function (j) { return mod.okPoner(p, j, cubiertasDe(E, j, kTramo(E, p, j))); });
       if (libresOk.length >= faltan && libresMod.length < faltan) {
         return { motivo: 'carga_modulo', detalle: 'Hay posiciones libres, pero sus módulos superarían la capacidad de carga por módulo (cargaMaxModuloKg): ' + redondear(pr.pesoUbic, 1) + ' kg por ubicación.' };
       }
     }
+    let kmax = 1;
+    cur.forEach(function (j) { const k = kTramo(E, p, j); if (k > kmax) kmax = k; });
+    if (kmax >= 2) return { motivo: 'capacidad', detalle: 'Se necesitan ' + pr.posReq + ' tramo(s) de ' + kmax + ' bahías contiguas (la carga mide ' + pr.largo + ' m) y solo hay ' + libres.length + ' tramo(s) libres de ' + n + ' posibles.' };
     return { motivo: 'capacidad', detalle: 'Se necesitan ' + pr.posReq + ' posiciones y solo hay ' + n + ' compatibles en total (' + libres.length + ' libres).' };
   }
 
   /** Centroide (x,y) de las posiciones de cada SKU en un reparto; null si no tiene. */
   function centroidesReparto(E, owner) {
     const sx = new Float64Array(E.nProd), sy = new Float64Array(E.nProd), n = new Int32Array(E.nProd);
-    for (let j = 0; j < E.nPos; j++) { const p = owner[j]; if (p < 0) continue; sx[p] += E.pos[j].cx; sy[p] += E.pos[j].cy; n[p]++; }
+    for (let j = 0; j < E.nPos; j++) { const p = owner[j]; if (p < 0 || esSecundaria(owner, j)) continue; sx[p] += E.pos[j].cx; sy[p] += E.pos[j].cy; n[p]++; }
     return { sx: sx, sy: sy, n: n };
   }
 
@@ -2646,7 +2941,7 @@
     let hayVence = false;
     const porProd = [];
     for (let p = 0; p < E.nProd; p++) porProd.push([]);
-    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) porProd[owner[j]].push(j);
+    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0 && !esSecundaria(owner, j)) porProd[owner[j]].push(j);   // un tramo de cantilever lleva sus lotes en la principal
     E.prods.forEach(function (pr, p) {
       const orig = productosOrig[pr.idx];
       if (pr.invalido || !orig || !Array.isArray(orig.lotes) || !orig.lotes.length) return;
@@ -2715,17 +3010,24 @@
     const asignaciones = [];
     const inc = crearIncompat(E);
     const mod = crearCargaModulo(E);
-    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) { inc.poner(owner[j], j); mod.poner(owner[j], j); }
+    for (let j = 0; j < E.nPos; j++) {
+      if (owner[j] < 0) continue;
+      inc.poner(owner[j], j);
+      if (!esSecundaria(owner, j)) mod.poner(owner[j], j, cubDeReparto(E, owner, j));   // el peso de un tramo se reparte entre sus bahías
+    }
     E.prods.forEach(function (pr, p) {
       if (pr.posReq <= 0) return;
       const ps = st.porProd[p].pos;
-      asignaciones.push({
+      const nTramos = ps.filter(function (j) { return owner.spanLen && owner.spanLen[j] >= 2; }).length;
+      const asig = {
         sku: pr.sku, clase: pr.clase, posReq: pr.posReq,
         posiciones: ps.map(function (j) { return E.pos[j].id; }),
         costo: redondear(st.porProd[p].costo, 3),
-        dDespMedia: ps.length ? redondear(st.porProd[p].dsum / ps.length, 2) : 0
-      });
-      const faltan = pr.posReq - ps.length;
+        dDespMedia: st.porProd[p].nPrin ? redondear(st.porProd[p].dsum / st.porProd[p].nPrin, 2) : 0
+      };
+      if (nTramos > 0) asig.spans = nTramos;   // v1.2: nº de tramos de cantilever de k ≥ 2 bahías; `posiciones` incluye TODAS las bahías cubiertas
+      asignaciones.push(asig);
+      const faltan = pr.posReq - st.porProd[p].nPrin;   // un tramo de k bahías cuenta como UNA ubicación
       if (faltan > 0) {
         const bloq = inc.activo ? inc.bloqueados(p) : null;
         const m = ex.manual ? { motivo: 'sin_asignar', detalle: 'Faltan ' + faltan + ' posiciones por asignar a mano.' } : motivoFalta(E, p, owner, bloq, faltan, mod);
@@ -2741,6 +3043,15 @@
     });
     const porPosicion = {};
     for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) fijarProp(porPosicion, E.pos[j].id, E.prods[owner[j]].sku);
+    // v1.2: tramos de cantilever: spanPorPosicion[id] = {principal, ids} para CADA posición cubierta (incluida la principal)
+    const spanPorPosicion = {};
+    if (owner.spanLen) {
+      for (let j = 0; j < E.nPos; j++) {
+        if (!(owner.spanLen[j] >= 2)) continue;
+        const ids = cubDeReparto(E, owner, j).map(function (c) { return E.pos[c].id; });
+        ids.forEach(function (id) { fijarProp(spanPorPosicion, id, { principal: ids[0], ids: ids.slice() }); });
+      }
+    }
     const rolPorPosicion = {};
     if (st.roles) for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0 && st.roles.rol[j] > 0) fijarProp(rolPorPosicion, E.pos[j].id, st.roles.rol[j] === 1 ? 'picking' : 'reserva');
     const bOwner = base.owner, bst = base.st;
@@ -2748,11 +3059,11 @@
     const clsOut = {};
     ['A', 'B', 'C'].forEach(function (k) {
       const c = st.cls[k];
-      clsOut[k] = { skus: c.skus, posiciones: c.posiciones, distMedia: c.wp > 0 ? redondear(c.wd / c.wp, 2) : c.posiciones > 0 ? redondear(c.dsum / c.posiciones, 2) : 0 };
+      clsOut[k] = { skus: c.skus, posiciones: c.posiciones, distMedia: c.wp > 0 ? redondear(c.wd / c.wp, 2) : c.np > 0 ? redondear(c.dsum / c.np, 2) : 0 };
     });
     // la mejora % solo es comparable si ambos repartos ubican exactamente los mismos SKU con el mismo número de posiciones
     const cntA = new Int32Array(E.nProd), cntB = new Int32Array(E.nProd);
-    for (let j = 0; j < E.nPos; j++) { if (owner[j] >= 0) cntA[owner[j]]++; if (bOwner[j] >= 0) cntB[bOwner[j]]++; }
+    for (let j = 0; j < E.nPos; j++) { if (owner[j] >= 0 && !esSecundaria(owner, j)) cntA[owner[j]]++; if (bOwner[j] >= 0 && !esSecundaria(bOwner, j)) cntB[bOwner[j]]++; }
     let mismoConjunto = true;
     for (let p = 0; p < E.nProd; p++) if (cntA[p] !== cntB[p]) { mismoConjunto = false; break; }
     const mejora = mismoConjunto && bst.costo > 0 ? ((bst.costo - st.costo) / bst.costo) * 100 : null;
@@ -2769,8 +3080,18 @@
       activa: E.repo, skusConPicking: roles ? roles.skusConPicking : 0,
       reposPorPeriodo: roles ? redondear(roles.reposTot, 3) : 0,
       distMediaReposicion: roles && roles.reposTot > 0 ? redondear(roles.reposDist / roles.reposTot, 2) : null,
-      skusSinUnidadesPorLinea: roles ? roles.sinUpl : 0
+      skusSinUnidadesPorLinea: roles ? roles.sinUpl : 0,
+      // v1.2: la distancia reserva → picking es CAMINADA sobre la malla; si algún par no la tiene se usa la recta de respaldo
+      metodoDistancia: !E.repo ? null : (roles && roles.nRespaldo > 0 ? 'mixta-con-respaldo-recta' : 'caminada'),
+      paresRespaldoRecta: roles ? roles.nRespaldo : 0
     };
+    if (E.repo && roles && roles.nRespaldo > 0) {
+      const rs = roles.respaldo, partes = [];
+      if (rs.sin_malla) partes.push(rs.sin_malla + ' sin malla del plano (posiciones externas)');
+      if (rs.no_alcanzable) partes.push(rs.no_alcanzable + ' sin camino entre reserva y picking');
+      if (rs.presupuesto) partes.push(rs.presupuesto + ' por exceder el presupuesto de cálculo de distancias caminadas');
+      adv.push('Reposición: ' + roles.nRespaldo + ' posición(es) de reserva usaron la LÍNEA RECTA como respaldo de la distancia caminada (' + partes.join('; ') + '): distMediaReposicion es mixta.');
+    }
     if (E.repo && roles && roles.sinUpl > 0) adv.push('[FALTA: unidades por línea de pedido] en ' + roles.sinUpl + ' SKU con reserva: se supone 1 unidad por línea para calcular las reposiciones.');
     return {
       // generadoEn = instante real de la corrida; con fecha de referencia dada NO se fabrica una hora: queda null y la fecha va aparte
@@ -2778,6 +3099,7 @@
       fechaReferencia: ex.fechaRef || null,
       asignaciones: asignaciones,
       porPosicion: porPosicion,
+      spanPorPosicion: spanPorPosicion,
       rolPorPosicion: rolPorPosicion,
       lotePorPosicion: lv.lotePorPosicion,
       vencimientos: lv.vencimientos,
@@ -2835,10 +3157,15 @@
       if (E.nCross > 0) s.push('Cross-docking: ' + E.nCross + ' SKU pasan por el muelle y NO ocupan posiciones de rack; su flujo (' + redondear(E.flujoCross, 2) + ' por periodo) se analiza aparte (muelle/staging), no entra al costo del slotting.');
       if (E.hayPeligro) s.push('Segregación por clase de peligro: dos SKU cuyas clases están en la matriz (por defecto SEGREGACION_DEFECTO) nunca comparten rack y quedan a la distancia mínima entre HUELLAS de rack de la matriz (si no trae distancia: ' + cfg.separacionIncompatibles + ' m). ' + SEGREGACION_REF);
       if (E.cap && E.prods.some(function (p) { return p.capMin > 1 && p.posReq > 0; })) s.push('Carriles de bloque (tipo piso): cada carril tiene profundidadPalets × apilado ubicaciones y lo ocupa UN solo SKU; posiciones = ⌈ubicaciones / capacidad del carril⌉ (con capacidades distintas se usa la menor, para no quedarse corto). Los carriles son LIFO: un SKU `fefo` no puede ir ahí. Estas posiciones no entran a la mejora local si cambian de capacidad.');
-      if (E.pos.some(function (q) { return q.tipo === 'cantilever'; })) s.push('Cantilever: la carga entra si su largo (`largoM`) ≤ largo de la bahía (largo/módulos del rack); no se modela el cruce entre bahías contiguas. [VERIFICAR con la ficha del fabricante]');
+      if (E.pos.some(function (q) { return q.tipo === 'cantilever'; })) {
+        s.push('Cantilever: la carga entra en una bahía si su largo (`largoM`) ≤ largo de la bahía (largo/módulos del rack). ' + (E.combinar
+          ? 'Con `config.cantileverCombinar` activa (por defecto), una carga más larga ocupa k = ⌈largoM / ancho de bahía⌉ bahías contiguas del MISMO rack y nivel (módulos consecutivos, hasta el máximo de módulos del rack; solo racks con 1 posición por módulo), todas ocupadas por ese SKU; su peso por ubicación se reparte entre las k bahías y cada una debe soportar peso/k por brazo (y por módulo si se definió cargaMaxModuloKg) [VERIFICAR con la ficha del fabricante]. Distancia y costo se miden en el punto de acceso de la posición PRINCIPAL (la primera bahía del tramo); las demás bahías solo ocupan espacio. Los tramos no entran a la mejora local.'
+          : 'La combinación de bahías contiguas está DESACTIVADA (`config.cantileverCombinar` = false): una carga más larga que la bahía queda sin ubicar. [VERIFICAR con la ficha del fabricante]'));
+      }
+      if (E.pos.some(function (q) { return q.tipo === 'piso' && (q.apilado || 1) > 1; })) s.push('Altura del apilado en piso: alto de la carga × apilado + holgura sobre la carga (' + cfg.holguraSobreCarga + ' m) × (apilado − 1) debe ser ≤ altura libre de la nave − holgura a rociadores (' + redondear(E.hMaxNave, 2) + ' m); restricción dura (motivo `altura_apilado`) solo para los SKU con `altoCargaM` [FALTA: altoCargaM en los demás: no se verifica y se avisa]. No se verifica la estabilidad de la carga ni la presión sobre la losa [VERIFICAR NFPA 13 / RNE A.130 y con el ingeniero estructural].');
       if (E.hayModCap) s.push('Carga por módulo: la suma del peso asignado a todas las posiciones de un módulo (rack + módulo, todos los niveles y slots) no puede superar su `cargaMaxModuloKg` (dato de la placa del fabricante). Peso de una posición = peso por ubicación × ubicaciones de la posición.');
       if (E.afin) s.push('Afinidad por co-ocurrencia en ' + E.afin.nPedidos + ' pedidos: los pares con lift > 1 se bonifican (peso configurable pesoAfinidad = ' + cfg.pesoAfinidad + ') cuando quedan a < ' + AFIN_RADIO_M + ' m; bonificación = pesoAfinidad × ' + AFIN_ESCALA_M + ' m × min(1, (lift − 1) / 2) [PROPIO – ajustar]. Es una guía de cercanía, no una restricción.' + (E.afin.nPedidos < 30 ? ' Muestra pequeña (< 30 pedidos) [VERIFICAR].' : ''));
-      if (E.repo) s.push('Modo picking/reserva (config.reposicion.activa): para cada SKU con más de una posición, ' + cfg.reposicion.posicionesPicking + ' posición(es) de PICKING (la más cercana al despacho a nivel accesible) cargan los picks y la RESERVA carga las reposiciones: repos = picks × unidades por línea / unidades por ubicación (palets-equivalentes por periodo) con costo repos × (2 × distancia reserva→picking + penalización de nivel). La distancia reserva→picking es en LÍNEA RECTA entre puntos de acceso (aproximación declarada; no es distancia caminada). Las entradas se reparten por igual entre todas las posiciones. Construcción en dos fases (primero picking, luego reserva) sin mejora local: es una heurística. Sin «unidades por línea» se supone 1 [FALTA: unidades por línea de pedido].');
+      if (E.repo) s.push('Modo picking/reserva (config.reposicion.activa): para cada SKU con más de una posición, ' + cfg.reposicion.posicionesPicking + ' posición(es) de PICKING (la más cercana al despacho a nivel accesible) cargan los picks y la RESERVA carga las reposiciones: repos = picks × unidades por línea / unidades por ubicación (palets-equivalentes por periodo) con costo repos × (2 × distancia reserva→picking + penalización de nivel). La distancia reserva→picking es CAMINADA sobre la malla del plano (camino más corto entre los puntos de acceso de la reserva y del picking, rodeando racks y muros); si algún par no tiene camino (o no hay malla), se usa la línea recta como respaldo y se avisa (`kpis.reposicion.metodoDistancia`). Las entradas se reparten por igual entre todas las posiciones. Construcción en dos fases (primero picking, luego reserva) sin mejora local: es una heurística. Sin «unidades por línea» se supone 1 [FALTA: unidades por línea de pedido].');
       if (E.prods.some(function (p) { return p.fefo; })) s.push('FEFO: un SKU con `fefo` solo va en posiciones NO LIFO (sin profundidad ni apilado > 1); si tiene lotes, los que vencen antes van a las posiciones de menor distancia al despacho (salen primero).');
     }
     return s;
@@ -2886,24 +3213,36 @@
     const op = opciones || {};
     const ent = entradaConBaseline(proyecto, op);
     const E = ent.E;
-    const owner = new Int32Array(E.nPos).fill(-1);
+    const owner = nuevoOwner(E);
     const extraAdv = [];
     if (op.soloSinUbicar && proyecto.resultado && proyecto.resultado.porPosicion) {
       const idPos = new Map();
       E.pos.forEach(function (q, j) { idPos.set(q.id, j); });
       const cuenta = new Int32Array(E.nProd);
       const pp = proyecto.resultado.porPosicion;
+      const spR = proyecto.resultado.spanPorPosicion && typeof proyecto.resultado.spanPorPosicion === 'object' ? proyecto.resultado.spanPorPosicion : {};
       Object.keys(pp).forEach(function (id) {
         const j = idPos.get(id), p = E.porSku.get(String(pp[id]));
         if (j === undefined || p === undefined) return;
         if (!E.elig[p * E.nPos + j] || cuenta[p] >= E.prods[p].posReq) return;
+        const k = kTramo(E, p, j);
+        if (k >= 2) {
+          // un tramo previo solo se conserva entero (misma principal y mismas bahías) y si sus bahías siguen libres
+          const t = Object.prototype.hasOwnProperty.call(spR, id) ? spR[id] : null;
+          const cub = cubiertasDe(E, j, k);
+          if (!t || t.principal !== id || !Array.isArray(t.ids) || !cub || t.ids.length !== k) return;
+          if (!cub.every(function (c, i) { return E.pos[c].id === t.ids[i] && owner[c] < 0; })) return;
+          ocuparCub(owner, p, cub); cuenta[p]++;
+          return;
+        }
+        if (owner[j] >= 0) return;
         owner[j] = p; cuenta[p]++;
       });
       extraAdv.push('Modo «solo sin ubicar»: se conservaron las ubicaciones previas válidas y solo se colocaron los faltantes (sin mejora local).');
     }
     const inc = crearIncompat(E);
     const mod = crearCargaModulo(E);
-    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) { inc.poner(owner[j], j); mod.poner(owner[j], j); }
+    cargarEstado(E, owner, inc, mod);
     const afs = crearAfinSku(E);
     const pasadas = op.pasadasMejora !== undefined ? Math.max(0, Math.floor(op.pasadasMejora)) : Math.max(0, Math.floor(E.cfg.pasadasMejora));
     if (E.repo && !op.soloSinUbicar) {
@@ -2929,34 +3268,54 @@
     const op = opciones || {};
     const ent = entradaConBaseline(proyecto, op);
     const E = ent.E;
-    const owner = new Int32Array(E.nPos).fill(-1);
+    const owner = nuevoOwner(E);
     const idPos = new Map();
     E.pos.forEach(function (q, j) { idPos.set(q.id, j); });
     const adv = [];
-    const cuenta = new Int32Array(E.nProd);
     const mapa = mapaPosicionASku || {};
     Object.keys(mapa).forEach(function (id) {
       const j = idPos.get(id), p = E.porSku.get(String(mapa[id]));
       if (j === undefined) { adv.push('La posición «' + id + '» no existe.'); return; }
       if (p === undefined) { adv.push('El SKU «' + mapa[id] + '» no existe o no es válido (posición ' + id + ').'); return; }
-      owner[j] = p; cuenta[p]++;
+      owner[j] = p;
     });
+    // v1.2: tramos de cantilever. Un SKU cuya carga necesita k ≥ 2 bahías en la posición j (principal) las ocupa todas: si el reparto
+    // dado trae la principal y las contiguas, se agrupan; si faltan y están libres, se completan (y se avisa); si no se puede, se avisa.
+    if (E.spanK) {
+      for (let j = 0; j < E.nPos; j++) {
+        const p = owner[j];
+        if (p < 0 || enTramo(owner, j) || !E.elig[p * E.nPos + j]) continue;
+        const k = kTramo(E, p, j);
+        if (k < 2) continue;
+        const cub = cubiertasDe(E, j, k);
+        const sec = cub ? cub.slice(1) : [];
+        const choca = !cub || sec.some(function (c) { return (owner[c] >= 0 && owner[c] !== p) || enTramo(owner, c); });
+        if (choca) { adv.push('SKU «' + E.prods[p].sku + '» en ' + E.pos[j].id + ': su carga de ' + E.prods[p].largo + ' m necesita ' + k + ' bahías contiguas del mismo rack y nivel y no están libres.'); continue; }
+        const faltantes = sec.filter(function (c) { return owner[c] < 0; });
+        faltantes.forEach(function (c) { owner[c] = p; });
+        ocuparCub(owner, p, cub);
+        if (faltantes.length) adv.push('SKU «' + E.prods[p].sku + '» en ' + E.pos[j].id + ': su carga necesita ' + k + ' bahías contiguas; se completó el tramo con ' + faltantes.map(function (c) { return E.pos[c].id; }).join(', ') + '.');
+      }
+    }
     const inc = crearIncompat(E);
     const mod = crearCargaModulo(E);
-    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0) { inc.poner(owner[j], j); mod.poner(owner[j], j); }
+    cargarEstado(E, owner, inc, mod);
+    const unid = new Int32Array(E.nProd);
+    for (let j = 0; j < E.nPos; j++) if (owner[j] >= 0 && !esSecundaria(owner, j)) unid[owner[j]]++;
     for (let j = 0; j < E.nPos; j++) {
       const p = owner[j];
-      if (p < 0) continue;
+      if (p < 0 || esSecundaria(owner, j)) continue;   // las secundarias de un tramo se validan con su principal
       const pr = E.prods[p], q = E.pos[j];
       if (!E.elig[p * E.nPos + j]) {
         let por = 'restricción dura';
         if (q.tipo !== pr.tipo) por = 'tipo de ubicación (' + q.tipo + ' ≠ ' + pr.tipo + ')';
-        else if (pr.pesoUbic > q.cargaMaxKg + 1e-9) por = 'peso (' + redondear(pr.pesoUbic, 1) + ' kg > ' + q.cargaMaxKg + ' kg)';
+        else if (pr.pesoUbic / kPorLargo(E, pr, q) > q.cargaMaxKg + 1e-9) por = 'peso (' + redondear(pr.pesoUbic / kPorLargo(E, pr, q), 1) + (kPorLargo(E, pr, q) > 1 ? ' kg por bahía' : ' kg') + ' > ' + q.cargaMaxKg + ' kg)';
         else if (pr.alto > (q.alturaLibreM === undefined ? Infinity : q.alturaLibreM) + 1e-9) por = 'altura de la carga';
         else if (pr.pesado && q.nivel > pr.nivelMax) por = 'nivel máximo para cargas pesadas (nivel ' + q.nivel + ' > ' + pr.nivelMax + ')';
         else if (pr.zona ? q.zonaTipo !== pr.zona : ZONAS_RESTRINGIDAS.indexOf(q.zonaTipo) >= 0) por = 'zona (' + q.zonaTipo + ')';
-        else if (q.tipo === 'cantilever' && (pr.largo === null || pr.largo > (q.anchoBahiaM === undefined || q.anchoBahiaM === null ? Infinity : q.anchoBahiaM) + 1e-9)) por = 'largo de la carga frente a la bahía de cantilever';
+        else if (q.tipo === 'cantilever' && (pr.largo === null || pr.largo > (q.anchoBahiaM === undefined || q.anchoBahiaM === null ? Infinity : q.anchoBahiaM) + 1e-9)) por = pr.largo === null ? 'falta el largo de la carga (largoM) para cantilever' : (E.combinar ? 'largo de la carga (' + pr.largo + ' m): no hay bahías contiguas suficientes que cumplan peso, altura, zona y accesibilidad desde esa posición' : 'largo de la carga (' + pr.largo + ' m) mayor que la bahía de cantilever (la combinación de bahías está desactivada)');
         else if ((q.apilado || 1) > pr.apilableMax) por = 'apilado (' + (q.apilado || 1) + ' > apilableMax ' + pr.apilableMax + ')';
+        else if (q.tipo === 'piso' && pr.altoDado && alturaApilado(pr.alto, q.apilado || 1, E.cfg.holguraSobreCarga) > E.hMaxNave + 1e-9) por = 'altura del apilado (' + (q.apilado || 1) + ' × ' + redondear(pr.alto, 2) + ' m + holgura = ' + redondear(alturaApilado(pr.alto, q.apilado || 1, E.cfg.holguraSobreCarga), 2) + ' m > ' + redondear(E.hMaxNave, 2) + ' m de altura libre menos holgura a rociadores) [motivo altura_apilado]';
         else if (pr.fefo && q.lifo === true) por = 'FEFO en una ubicación LIFO';
         else if (!q.accesible) por = 'posición inaccesible';
         adv.push('SKU «' + pr.sku + '» en ' + q.id + ' incumple: ' + por + '.');
@@ -2977,7 +3336,7 @@
       }
     }
     E.prods.forEach(function (pr, p) {
-      if (pr.posReq > 0 && cuenta[p] > pr.posReq) adv.push('SKU «' + pr.sku + '» tiene ' + cuenta[p] + ' posiciones y solo necesita ' + pr.posReq + '.');
+      if (pr.posReq > 0 && unid[p] > pr.posReq) adv.push('SKU «' + pr.sku + '» tiene ' + unid[p] + ' posiciones y solo necesita ' + pr.posReq + '.');
     });
     return armarResultado(E, owner, ent.base, t0, { manual: true, advertencias: adv, productos: proyecto.productos, fechaRef: fechaRefEfectiva(op, E.cfg) });
   }
@@ -3102,6 +3461,24 @@
         add('aviso', 'RACK_FUERA_DE_RANGO', 'El rack «' + (r.nombre || r.id || ('rack ' + (i + 1))) + '» excede los topes (módulos ≤ ' + MAX_MODULOS_RACK + ', niveles ≤ ' + MAX_NIVELES + ', posiciones por módulo ≤ ' + MAX_SLOTS + '): el motor lo recorta.');
       }
     });
+    // v1.2: altura del apilado en racks de piso con la carga más alta de los SKU de tipo piso
+    const prodsPiso = (proyecto.productos || []).filter(function (q) { return q && q.crossdock !== true && (q.tipoUbic || 'palet') === 'piso'; });
+    const altoPisoMax = prodsPiso.reduce(function (m, q) { return typeof q.altoCargaM === 'number' && isFinite(q.altoCargaM) && q.altoCargaM > m ? q.altoCargaM : m; }, 0);
+    const pisoSinAlto = prodsPiso.filter(function (q) { return !(typeof q.altoCargaM === 'number' && isFinite(q.altoCargaM) && q.altoCargaM > 0); }).length;
+    racks.forEach(function (r, i) {
+      if ((r.tipo || 'palet') !== 'piso' || !(r.largo > 0)) return;
+      const a = Math.max(1, Math.min(MAX_APILADO, Math.floor(num(r.apilado, 1))));
+      const nom = r.nombre || r.id || ('rack ' + (i + 1));
+      if (altoPisoMax > 0) {
+        const h = alturaApilado(altoPisoMax, a, cfg.holguraSobreCarga);
+        if (h > alturaMax + 1e-9) add('aviso', 'PISO_APILADO_ALTURA', 'El rack de piso «' + nom + '» apila ' + a + ' y la carga más alta de los SKU de piso mide ' + altoPisoMax + ' m: ' + a + ' × ' + altoPisoMax + ' + ' + cfg.holguraSobreCarga + ' × ' + (a - 1) + ' = ' + redondear(h, 2) + ' m, más que la altura útil bajo rociadores (' + redondear(alturaMax, 2) + ' m): ese SKU no podrá ubicarse allí [VERIFICAR norma].');
+      }
+      if (a > 1 && pisoSinAlto > 0) add('info', 'PISO_SIN_ALTO_CARGA', 'El rack de piso «' + nom + '» apila ' + a + ' y ' + pisoSinAlto + ' SKU de piso no traen altoCargaM [FALTA: altoCargaM]: no se puede verificar la altura del apilado.');
+    });
+    // v1.2: el cantilever más largo (rack completo y bahía) frente al largo de las cargas
+    const racksCant = racks.filter(function (r) { return r && r.tipo === 'cantilever' && r.largo > 0 && r.modulos >= 1; });
+    const maxLargoCant = racksCant.reduce(function (m, r) { return Math.max(m, r.largo); }, 0);
+    const maxBahiaCant = racksCant.reduce(function (m, r) { return Math.max(m, r.largo / Math.min(MAX_MODULOS_RACK, Math.max(1, r.modulos | 0))); }, 0);
     if (contornoOk) {
       const bbC = bboxPoligono(contorno);
       if (bbC.ancho > 300 || bbC.alto > 300) add('aviso', 'ESCALA_SOSPECHOSA', 'El contorno mide ' + redondear(bbC.ancho, 0) + ' × ' + redondear(bbC.alto, 0) + ' m (más de 300 × 300 m): probablemente la calibración de escala está mal.');
@@ -3198,6 +3575,10 @@
       if (num(p.cantidad, 0) < 0 || num(p.picks, 0) < 0) add('error', 'VALOR_NEGATIVO', 'El SKU «' + nom + '» tiene cantidad o picks negativos.');
       const tipo = p.tipoUbic || 'palet';
       if (tipo === 'cantilever' && !(typeof p.largoM === 'number' && isFinite(p.largoM) && p.largoM > 0)) add('aviso', 'CANTILEVER_SIN_LARGO', 'El SKU «' + nom + '» va en cantilever pero no tiene el largo de la carga (`largoM`): no podrá ubicarse.');
+      else if (tipo === 'cantilever' && racksCant.length) {
+        if (p.largoM > maxLargoCant + 1e-9) add('aviso', 'CANTILEVER_LARGO_EXCEDE_RACK', 'El SKU «' + nom + '» mide ' + p.largoM + ' m de largo y el rack de cantilever más largo mide ' + redondear(maxLargoCant, 2) + ' m en total: no cabe ni combinando bahías contiguas.');
+        else if (cfg.cantileverCombinar === false && p.largoM > maxBahiaCant + 1e-9) add('aviso', 'CANTILEVER_LARGO_EXCEDE_BAHIA', 'El SKU «' + nom + '» mide ' + p.largoM + ' m de largo y la bahía de cantilever más larga mide ' + redondear(maxBahiaCant, 2) + ' m, con la combinación de bahías contiguas desactivada (config.cantileverCombinar = false): no podrá ubicarse.');
+      }
       const cantDimV = (cfg.dimensionarPor === 'maximo' && typeof p.stockMax === 'number' && isFinite(p.stockMax) && p.stockMax > num(p.cantidad, 0)) ? p.stockMax : Math.max(0, num(p.cantidad, 0));
       const posReq = Math.ceil(cantDimV / p.unidadesPorUbic / (capMinTipo[tipo] || 1) - 1e-9);
       posReqPorTipo[tipo] = (posReqPorTipo[tipo] || 0) + posReq;
@@ -3907,7 +4288,134 @@
    */
   function normalizarProyecto(proyecto) { return normalizarConAvisos(proyecto).proyecto; }
 
+  /** Texto de la marca: string sin saltos de línea ni «<»/«>», recortado a 80 caracteres; '' si no es texto. */
+  function textoMarca(v) {
+    if (typeof v !== 'string') return '';
+    return v.replace(/[\u0000-\u001f\u007f\u2028\u2029<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).trim();
+  }
+  const MAX_LOGO_CHARS = 400000;
+  /** Marca del informe `{empresa, autor, logo}`: logo solo como data URL base64 png/jpeg/webp de ≤ 400 000 caracteres, o null. */
+  function normalizarMarca(m, avisos) {
+    const out = { empresa: '', autor: '', logo: null };
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return out;
+    out.empresa = textoMarca(m.empresa);
+    out.autor = textoMarca(m.autor);
+    const lg = m.logo;
+    if (typeof lg === 'string' && lg !== '') {
+      const ok = lg.length <= MAX_LOGO_CHARS && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+\/]+={0,2}$/.test(lg) && (lg.length - lg.indexOf(',') - 1) % 4 === 0;
+      if (ok) out.logo = lg;
+      else if (avisos) avisos.push('El logo de la marca se descartó: debe ser una imagen PNG, JPEG o WEBP en base64 (data URL) de hasta ' + MAX_LOGO_CHARS + ' caracteres.');
+    } else if (lg !== null && lg !== undefined && lg !== '' && avisos) avisos.push('El logo de la marca se descartó: no es una imagen válida.');
+    return out;
+  }
+
+  /**
+   * Ancho de pasillo de apilado a 90° (Ast) con la forma Ast = Wa + l6 + x + a, función pura (sin proyecto). Entradas en metros ≥ 0:
+   * radioGiroM (Wa, ficha del equipo; sin valor por defecto), largoCargaM (l6; 1,2 m [VERIFICAR] si el usuario no lo da),
+   * holguraCargaRackM (x) y holguraSeguridadM (a): del usuario, sin valores inventados. Si falta Wa, x o a → ok:false y `falta`.
+   * Salida: {ok, anchoM, anchoRedondeadoM, formula, formulaSustituida, componentes:{Wa,l6,x,a}, supuestos, avisos, falta}.
+   */
+  function calcularPasilloVDMA(p) {
+    const e = p && typeof p === 'object' && !Array.isArray(p) ? p : {};
+    const falta = [], avisos = [], comp = { Wa: null, l6: null, x: null, a: null };
+    const fmt = function (v) { return String(redondear(v, 3)); };
+    const leer = function (k, etiqueta, positivo) {
+      const v = e[k];
+      if (v === undefined || v === null || v === '') return null;
+      if (typeof v !== 'number' || !isFinite(v) || v < 0 || (positivo && v === 0)) {
+        avisos.push('«' + etiqueta + '» no es válido (' + (typeof v === 'number' ? (isFinite(v) ? String(v) : 'no es un número finito') : 'valor no numérico') + '): debe ser un número ' + (positivo ? 'mayor que 0' : '≥ 0') + ' en metros. No se calculó con un valor inventado.');
+        falta.push(k);
+        return undefined;
+      }
+      return v;
+    };
+    const wa = leer('radioGiroM', 'radio de giro Wa', true);
+    if (wa === null) falta.push('radioGiroM');
+    comp.Wa = wa === null || wa === undefined ? null : wa;
+    let l6 = leer('largoCargaM', 'largo de la carga l6', true);
+    if (l6 === null) {
+      l6 = 1.2;
+      avisos.push('No se indicó el largo de la carga (l6): se usó 1,2 m, valor típico de un palet europeo/CHEP en el sentido de la carga [VERIFICAR con la medida real de su palet].');
+    }
+    comp.l6 = l6 === undefined ? null : l6;
+    const x = leer('holguraCargaRackM', 'término x', false);
+    if (x === null) falta.push('holguraCargaRackM');
+    comp.x = x === null || x === undefined ? null : x;
+    const a = leer('holguraSeguridadM', 'holgura de seguridad a', false);
+    if (a === null) falta.push('holguraSeguridadM');
+    comp.a = a === null || a === undefined ? null : a;
+    const supuestos = [
+      'Forma usada: Ast = Wa + l6 + x + a (ancho del pasillo de apilado a 90°; Wa = radio de giro del equipo, l6 = largo de la carga, x y a = términos que da el usuario). Fuente consultada el 08/11/2026: guía de ancho de pasillo de Toyota Material Handling (sitio baltic.toyota-forklifts.eu, sección guides/aisle-width-guide), que la escribe «Ast = Wa + x + l6 + a» para carretillas contrapesadas de 4 ruedas cuando b12 ≤ 2·b13, con Wa = radio de giro, l6 = largo de la carga, x = distancia del centro de las ruedas delanteras a la cara de las horquillas y a = holgura de seguridad (la guía cita 200 mm como valor típico de a).',
+      'NO se pudo verificar la notación ni la fórmula en el texto de VDMA 15173 (norma de pago, no consultada); la norma FEM 4.005 («Industrial trucks – 90° stacking aisle width», edición 2013) existe y toma el mayor de varios casos geométricos. [VERIFICAR con la norma, con la ficha del equipo y con el fabricante]: las fórmulas de retráctiles, trilaterales y VNA difieren y esta forma no es válida sin revisar para ellos.',
+      'El término x se recibe como `holguraCargaRackM` (nombre del contrato): en la fuente consultada x es una cota del EQUIPO (centro de ruedas delanteras a cara de horquillas); ingrese lo que su ficha indique para x. El programa no supone ni x ni a: si faltan, no calcula.',
+      'Resultado de orientación de diseño: no afirma cumplimiento de ninguna norma ni de la ficha del equipo; se compara con el ancho configurado, pero el ancho real lo fija el fabricante del equipo y el responsable de seguridad.',
+      'No incluye pasillo de doble sentido, cruce con peatones ni holgura de racks con carga sobresaliente. Se calcula con todos los decimales y se redondea a 2 decimales solo para mostrar.'
+    ];
+    const formula = 'Ast = Wa + l6 + x + a';
+    const ok = falta.length === 0;
+    const out = { ok: ok, anchoM: null, anchoRedondeadoM: null, formula: formula, formulaSustituida: null, componentes: comp, supuestos: supuestos, avisos: avisos, falta: falta };
+    if (ok) {
+      const ancho = comp.Wa + comp.l6 + comp.x + comp.a;
+      out.anchoM = redondear(ancho, 9);
+      out.anchoRedondeadoM = redondear(ancho, 2);
+      out.formulaSustituida = 'Ast = ' + fmt(comp.Wa) + ' + ' + fmt(comp.l6) + ' + ' + fmt(comp.x) + ' + ' + fmt(comp.a) + ' = ' + redondear(ancho, 2).toFixed(2) + ' m';
+      if (comp.a === 0) avisos.push('La holgura de seguridad a es 0 m: no queda margen de maniobra [VERIFICAR con la ficha del equipo].');
+    }
+    return out;
+  }
+
   /** Como normalizarProyecto, pero devuelve también {avisos:[…]} (p. ej. racks con nombre repetido que se renombraron). */
+  /* Tope TOTAL de posiciones de un proyecto (suma de módulos × niveles × slots de todos los racks). Un archivo, enlace o JSON
+     no confiable no puede pedir millones de posiciones: se descartan los racks que excedan y se avisa (auditoría v1.2, A-1). */
+  const MAX_POSICIONES_PROYECTO = 150000, MAX_RACKS_PROYECTO = 20000;
+  function posicionesDeUnRack(r) {
+    const mods = Math.min(MAX_MODULOS_RACK, Math.max(1, Math.floor(num(r && r.modulos, 1))));
+    const niv = Math.min(MAX_NIVELES, Math.max(1, Math.floor(num(r && r.niveles, 1))));
+    const sl = Math.min(MAX_SLOTS, Math.max(1, Math.floor(num(r && r.slotsPorModulo, 1))));
+    return mods * niv * sl;
+  }
+  function limitarPosicionesRacks(racks) {
+    const lista = Array.isArray(racks) ? racks : [];
+    const salen = [];
+    let acum = 0, descartados = 0;
+    for (let i = 0; i < lista.length; i++) {
+      const n = posicionesDeUnRack(lista[i]);
+      if (salen.length < MAX_RACKS_PROYECTO && acum + n <= MAX_POSICIONES_PROYECTO) { salen.push(lista[i]); acum += n; } else descartados++;
+    }
+    return { racks: salen, posiciones: acum, descartados: descartados };
+  }
+  function fijarRango(o, k, lo, hi, def) {
+    const v = o[k];
+    if (typeof v !== 'number' || !isFinite(v)) { if (v !== undefined && v !== null) o[k] = def; return; }
+    o[k] = v < lo ? lo : (v > hi ? hi : v);
+  }
+  /* Acota valores numéricos absurdos (1e308, negativos donde no caben) para que ningún texto muestre «Infinity» ni se cuelgue el cálculo. */
+  function endurecerLimites(out, avisos) {
+    let tocados = 0;
+    const antes = out.racks.length;
+    const lim = limitarPosicionesRacks(out.racks);
+    if (lim.descartados > 0) {
+      out.racks = lim.racks;
+      avisos.push('El proyecto pide demasiadas posiciones: se conservaron los primeros ' + out.racks.length + ' racks (' + lim.posiciones + ' posiciones; tope ' + MAX_POSICIONES_PROYECTO + ') y se descartaron ' + lim.descartados + '.');
+    }
+    out.racks.forEach(function (r) {
+      if (!r || typeof r !== 'object') return;
+      const o0 = JSON.stringify([r.modulos, r.niveles, r.slotsPorModulo, r.largo, r.fondo, r.cx, r.cy, r.altoNivel, r.altoBase, r.cargaMaxKg, r.profundidadPalets, r.apilado]);
+      fijarRango(r, 'modulos', 1, MAX_MODULOS_RACK, 1); fijarRango(r, 'niveles', 1, MAX_NIVELES, 1); fijarRango(r, 'slotsPorModulo', 1, MAX_SLOTS, 1);
+      fijarRango(r, 'largo', 0.1, 500, 1); fijarRango(r, 'fondo', 0.1, 50, 1); fijarRango(r, 'cx', -1e6, 1e6, 0); fijarRango(r, 'cy', -1e6, 1e6, 0);
+      fijarRango(r, 'altoNivel', 0.05, 20, 1); fijarRango(r, 'altoBase', 0, 5, 0.15); fijarRango(r, 'cargaMaxKg', 0, 1e6, 1000);
+      fijarRango(r, 'profundidadPalets', 1, 50, 1); fijarRango(r, 'apilado', 1, 10, 1);
+      if (JSON.stringify([r.modulos, r.niveles, r.slotsPorModulo, r.largo, r.fondo, r.cx, r.cy, r.altoNivel, r.altoBase, r.cargaMaxKg, r.profundidadPalets, r.apilado]) !== o0) tocados++;
+    });
+    out.productos.forEach(function (q) {
+      if (!q || typeof q !== 'object') return;
+      ['cantidad', 'unidadesPorUbic', 'picks', 'entradas', 'pesoUnitKg', 'stockMax', 'picksPico', 'unidadesPorLinea', 'flujoCrossdock'].forEach(function (k) { fijarRango(q, k, 0, 1e9, 0); });
+      fijarRango(q, 'altoCargaM', 0, 50, 0); fijarRango(q, 'largoM', 0, 500, 0); fijarRango(q, 'apilableMax', 1, 20, 1);
+    });
+    if (tocados > 0) avisos.push('Se acotaron valores fuera de rango en ' + tocados + ' rack(s) (módulos ≤ ' + MAX_MODULOS_RACK + ', niveles ≤ ' + MAX_NIVELES + ', posiciones por módulo ≤ ' + MAX_SLOTS + ', medidas razonables).');
+    return antes;
+  }
+
   function normalizarConAvisos(proyecto) {
     const avisos = [];
     const base = crearProyectoVacio();
@@ -3921,6 +4429,10 @@
     ['reposicion', 'segregacion', 'muelle'].forEach(function (k) {
       out.config[k] = Object.assign({}, configPorDefecto(eq)[k], (p.config && p.config[k] && typeof p.config[k] === 'object') ? p.config[k] : {});
     });
+    // v1.2: combinar bahías de cantilever (por defecto sí) y datos del usuario para el ancho de pasillo VDMA
+    out.config.cantileverCombinar = out.config.cantileverCombinar !== false;
+    out.config.pasilloVDMA = normalizarPasilloVDMA(out.config.pasilloVDMA);
+    out.marca = normalizarMarca(p.marca, avisos);
     out.racks.forEach(function (r) {
       if (r.equipo === undefined) r.equipo = null;
       if (r.anchoPasillo === undefined) r.anchoPasillo = null;
@@ -3929,6 +4441,7 @@
       if (r.apilado === undefined) r.apilado = 1;
       if (r.zonaId === undefined) r.zonaId = null;
     });
+    endurecerLimites(out, avisos);
     // racks con NOMBRE repetido: se renombran («R03», «R03-2»…) para que los ids de posición sean únicos; se advierte, no se rechaza
     const dups = nombresRacksUnicos(out.racks);
     dups.renombrados.forEach(function (d) {
@@ -3963,11 +4476,14 @@
     huellaMinDistancia: huellaMinDistancia,
     moduloDePosicion: moduloDePosicion,
     anchoPasilloRack: anchoPasilloDeRack,
+    limitarPosicionesRacks: limitarPosicionesRacks,
+    MAX_POSICIONES_PROYECTO: MAX_POSICIONES_PROYECTO,
     calcularAfinidad: calcularAfinidad,
     parseCSVPedidos: parseCSVPedidos,
     normalizarProyecto: normalizarProyecto,
     normalizarConAvisos: normalizarConAvisos,
     normalizar: normalizarProyecto,
+    calcularPasilloVDMA: calcularPasilloVDMA,
     PRESETS_EQUIPO: PRESETS_EQUIPO,
     NOMBRES_EQUIPO: NOMBRES_EQUIPO,
     COLUMNAS_PRODUCTO: COLUMNAS_PRODUCTO,

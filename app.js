@@ -59,6 +59,8 @@ var NOMBRES_MOTIVO = {
   carga_modulo: 'Se superaría la carga máxima del módulo (dato suyo, según placa del fabricante)', lifo: 'FEFO exige una ubicación sin LIFO y solo hay posiciones LIFO', fefo_lifo: 'FEFO exige una ubicación sin LIFO y solo hay posiciones LIFO',
   segregacion: 'Segregación por peligro: no hay lugar a la distancia mínima de los incompatibles', largo: 'La carga es más larga que la bahía cantilever', apilado: 'El apilado pedido supera lo que permite la carga', crossdock: 'Cross-docking: no ocupa rack'
 };
+NOMBRES_MOTIVO.altura_apilado = 'El apilado no cabe bajo la altura libre de la nave (altura de la carga × apilado + holguras; ver el detalle con las cifras)';
+NOMBRES_MOTIVO.largo = 'La carga es más larga que la bahía cantilever y no cabe combinando bahías contiguas (o la opción «Combinar bahías» está desmarcada)';
 function ymdValido(v) { return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v + 'T00:00:00Z')) && new Date(v + 'T00:00:00Z').toISOString().slice(0, 10) === v; }
 function ymdHoy() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 var NOMBRES_EQUIPO = Object.assign({ manual: 'Manual (persona o carro de picking)', apilador: 'Apilador', retractil: 'Retráctil', contrapesado: 'Contrapesado', vna: 'VNA' }, M.NOMBRES_EQUIPO || {});
@@ -212,6 +214,13 @@ function sanearResultado(r) {
     var v = r.lotePorPosicion[id]; if (v && typeof v === 'object') lp[id] = { lote: ss(v.lote, '', 40), cantidad: nn(v.cantidad, 0), vence: ymdValido(v.vence) ? v.vence : null };
   });
   o.lotePorPosicion = lp;
+  /* v1.2: tramos cantilever de varias bahías { principal, ids[] } por cada posición cubierta */
+  var spn = dic();
+  if (r.spanPorPosicion && typeof r.spanPorPosicion === 'object') Object.keys(r.spanPorPosicion).slice(0, 200000).forEach(function (id) {
+    var v = r.spanPorPosicion[id];
+    if (v && typeof v === 'object' && Array.isArray(v.ids) && v.ids.length >= 2 && v.ids.length <= 1000) spn[id] = { principal: ss(v.principal, '', 80), ids: v.ids.map(function (q) { return ss(q, '', 80); }) };
+  });
+  o.spanPorPosicion = spn;
   o.vencimientos = arr(r.vencimientos, 5000).map(function (v) {
     v = v && typeof v === 'object' ? v : {};
     return { sku: ss(v.sku, ''), lote: ss(v.lote, '', 40), vence: ymdValido(v.vence) ? v.vence : null, diasRestantes: nn(v.diasRestantes, null) };
@@ -273,6 +282,21 @@ function cfgZonaLimpia(c) {
   });
   return o;
 }
+/* v1.2 — marca del informe: empresa y autor (≤ 80 caracteres, sin saltos de línea ni < >) y logo (solo data URL png/jpeg/webp de ≤ 400 000 caracteres) */
+var RE_LOGO = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+\/]+=*$/;
+function logoValido(v) { return typeof v === 'string' && v.length <= 400000 && RE_LOGO.test(v) && (v.length - v.indexOf(',') - 1) % 4 === 0; }
+function marcaLimpia(m) {
+  m = m && typeof m === 'object' && !Array.isArray(m) ? m : {};
+  var t = function (v) { return typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : ''; };
+  return { empresa: t(m.empresa), autor: t(m.autor), logo: logoValido(m.logo) ? m.logo : null };
+}
+/* v1.2 — datos guardados del cálculo de pasillo VDMA (todos del usuario; null = sin dato) */
+function pasilloVDMALimpio(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  var o = {}, alguno = false;
+  ['radioGiroM', 'largoCargaM', 'holguraCargaRackM', 'holguraSeguridadM'].forEach(function (k) { var x = nn(v[k], null); o[k] = x !== null && x >= 0 && x <= 50 ? x : null; if (o[k] !== null) alguno = true; });
+  return alguno ? o : null;
+}
 function proyectoNormalizado(p) {
   var base = M.crearProyectoVacio();
   if (!p || typeof p !== 'object' || Array.isArray(p)) p = {};
@@ -310,7 +334,7 @@ function proyectoNormalizado(p) {
       id: ss(k.id, 'R' + (i + 1), 40), nombre: ss(k.nombre, 'R' + (i + 1), 80),
       cx: nn(k.cx, 0), cy: nn(k.cy, 0), ang: nn(k.ang, 0),
       largo: clamp(nn(k.largo, 2.7), 0.1, 500), fondo: clamp(nn(k.fondo, 1.1), 0.1, 50),
-      modulos: Math.round(clamp(nn(k.modulos, 1), 1, 1000)), niveles: Math.round(clamp(nn(k.niveles, 1), 1, 30)), slotsPorModulo: Math.round(clamp(nn(k.slotsPorModulo, 1), 1, 20)),
+      modulos: Math.round(clamp(nn(k.modulos, 1), 1, 500)), niveles: Math.round(clamp(nn(k.niveles, 1), 1, 20)), slotsPorModulo: Math.round(clamp(nn(k.slotsPorModulo, 1), 1, 10)),
       altoNivel: clamp(nn(k.altoNivel, tipo === 'bin' ? 0.45 : 1.6), 0.05, 20), altoBase: clamp(nn(k.altoBase, 0.15), 0, 5),
       cargaMaxKg: clamp(nn(k.cargaMaxKg, 1000), 0, 1e6), tipo: tipo, frente: enLista(k.frente, ['A', 'B'], 'A'), auto: k.auto === true,
       equipo: enLista(k.equipo, EQUIPOS_VALIDOS, null), anchoPasillo: (function () { var a = nnPosEstricto(k.anchoPasillo); return a === null ? null : clamp(a, 0.5, 12); })(),
@@ -319,6 +343,7 @@ function proyectoNormalizado(p) {
     };
     return o;
   });
+  if (typeof M.limitarPosicionesRacks === 'function') { var limR = M.limitarPosicionesRacks(r.racks); if (limR.descartados > 0) { r.racks = limR.racks; D12.recortePos = limR.descartados; } }   // tope total de posiciones (auditoría A-1)
   var c = p.config && typeof p.config === 'object' ? p.config : {};
   var cfg = {};
   Object.keys(base.config).forEach(function (key) {
@@ -352,6 +377,8 @@ function proyectoNormalizado(p) {
     diasPermanenciaRec: clamp(nn(mu.diasPermanenciaRec, 1), 0, 365), diasPermanenciaDesp: clamp(nn(mu.diasPermanenciaDesp, 1), 0, 365),
     m2PorPalet: nnPosEstricto(mu.m2PorPalet), factorManiobra: nnPosEstricto(mu.factorManiobra)
   };
+  var pv = pasilloVDMALimpio(c.pasilloVDMA); if (pv) cfg.pasilloVDMA = pv;
+  if (typeof c.cantileverCombinar === 'boolean') cfg.cantileverCombinar = c.cantileverCombinar;
   r.config = cfg;
   r.productos = arr(p.productos, 50000).map(function (q) {
     q = q && typeof q === 'object' ? q : {};
@@ -371,6 +398,7 @@ function proyectoNormalizado(p) {
     };
   });
   r.pedidos = pedidosLimpios(p.pedidos);
+  r.marca = marcaLimpia(p.marca);
   r.resultado = sanearResultado(p.resultado);
   return r;
 }
@@ -390,7 +418,8 @@ function nuevoId(arr, pref) {
 function snap() {
   var pl = S.proy.plano, im = pl.imagen, s;
   pl.imagen = null;
-  try { s = JSON.stringify(S.proy); } finally { pl.imagen = im; }
+  var mk = S.proy.marca, lg = mk ? mk.logo : null; if (mk) mk.logo = null;   // el logo (hasta 400 KB) tampoco entra en cada instantánea
+  try { s = JSON.stringify(S.proy); } finally { pl.imagen = im; if (mk) mk.logo = lg; }
   return { s: s, im: im, w: pl.anchoPx, h: pl.altoPx };   // la imagen va por referencia (no se copia ni se serializa)
 }
 function pushUndo(s) {
@@ -400,6 +429,7 @@ function pushUndo(s) {
 }
 function restaurar(e) {
   var p = proyectoNormalizado(JSON.parse(e.s));
+  if (S.proy.marca) p.marca.logo = S.proy.marca.logo;   // el logo no se deshace: se conserva el actual
   var cambioImg = S.proy.plano.imagen !== e.im;
   p.plano.imagen = e.im || null; p.plano.anchoPx = e.w || 0; p.plano.altoPx = e.h || 0;
   S.proy = p;
@@ -1815,7 +1845,7 @@ function rotarRack() {
 function onKey(e) {
   var t = e.target, tag = t && t.tagName;
   var enCampo = t && (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || t.isContentEditable);
-  var dlgAbierto = $('#dlg').open;
+  var dlgAbierto = $('#dlg').open || $('#dlg-3d').open;
   if (dlgAbierto) return;
   var ctrl = e.ctrlKey || e.metaKey;
   var k = (e.key || '').toLowerCase();
@@ -2194,6 +2224,8 @@ function sincronizarCampos() {
   setVal('a-fecha', c.fechaReferencia);
   setVal('a-dias-venc', c.diasAlertaVencimiento);
   var su = $('#a-seg-usar'); if (su && !enfocado(su)) su.checked = !(c.segregacion && c.segregacion.usar === false);
+  var ccm = $('#a-cant-combinar'); if (ccm && !enfocado(ccm)) ccm.checked = c.cantileverCombinar !== false;
+  sincronizarVDMA();
   setVal('d-evac', c.evacMaxM); setVal('d-evac-ancho', c.anchoEvacuacionMin); setVal('d-carga-piso', c.cargaPisoMaxKgM2);
   var mu = c.muelle || {};
   setVal('m-rec', mu.palletsDiaRecepcion); setVal('m-desp', mu.palletsDiaDespacho); setVal('m-dias-rec', mu.diasPermanenciaRec); setVal('m-dias-desp', mu.diasPermanenciaDesp);
@@ -2240,6 +2272,7 @@ function leerOpcionesAsignarV11() {
   var dv = num($('#a-dias-venc').value, null); c.diasAlertaVencimiento = dv !== null && dv >= 0 ? Math.round(Math.min(dv, 3650)) : null;
   c.segregacion = c.segregacion || { usar: true, matriz: null };
   c.segregacion.usar = $('#a-seg-usar').checked;
+  var cc = $('#a-cant-combinar'); if (cc) c.cantileverCombinar = cc.checked;   // v1.2
 }
 /* datos suyos de la pestaña Análisis */
 function leerDatosSuyos() {
@@ -3055,6 +3088,10 @@ async function importarPedidosArchivo(file) {
   var r;
   try { r = (typeof M.parseCSVPedidos === 'function' ? M.parseCSVPedidos : parseCSVPedidosLocal)(texto); } catch (e2) { aviso('El CSV de pedidos no se pudo interpretar: ' + e2.message, 'error'); return; }
   var ped = pedidosLimpios(r && r.pedidos);
+  if (ped.length && (S.proy.pedidos || []).length) {   // B4 (v1.2): ya hay pedidos → confirmar antes de tocar nada
+    var okRep = await preguntar('Reemplazar los pedidos', 'Ya hay ' + S.proy.pedidos.length + ' pedidos cargados. ¿Reemplazarlos por los ' + ped.length + ' del archivo?\nPuedes deshacer con Ctrl+Z.', [{ texto: 'Reemplazar', valor: true, peligro: true }, { texto: 'Cancelar', valor: null, primario: true }]);
+    if (!okRep) { aviso('Importación de pedidos cancelada: se conservaron los ' + S.proy.pedidos.length + ' pedidos actuales.', 'info', 4000); return; }
+  }
   S.erroresCSV = (r && r.errores) || []; S.avisosCSV = (r && r.advertencias) || []; S.csvCancelado = false;
   if (!ped.length) { aviso('No se encontró ningún pedido válido en el CSV.', 'warn', 7000); refrescarArticulos(); return; }
   mutar(function () { S.proy.pedidos = ped; });
@@ -3213,7 +3250,7 @@ function kpiV11HTML(res, k) {
   var rp = k.reposicion;
   if (rp && typeof rp === 'object') {
     filas += dd('Picking / reserva', rp.activa ? 'activo · ' + fmt(N(rp.skusConPicking), 0) + ' SKU con posición de picking' : 'desactivado (se comporta como antes)');
-    if (rp.activa) filas += dd('Reposiciones por periodo', fmt(N(rp.reposPorPeriodo), 1) + ' palets-equiv. · distancia media reserva→picking ' + (rp.distMediaReposicion == null ? '—' : fmt(N(rp.distMediaReposicion), 1) + ' m'));
+    if (rp.activa) filas += dd('Reposiciones por periodo', fmt(N(rp.reposPorPeriodo), 1) + ' palets-equiv. · distancia media reserva→picking ' + (rp.distMediaReposicion == null ? '—' : fmt(N(rp.distMediaReposicion), 1) + ' m' + (rp.metodoDistancia === 'caminada' ? ' (caminada)' : rp.metodoDistancia === 'mixta-con-respaldo-recta' ? ' (caminada; los pares sin ruta usan la línea recta como respaldo)' : '')));
   }
   var af = k.afinidad;
   if (af && typeof af === 'object') filas += dd('Afinidad', fmt(N(af.pares), 0) + ' pares con lift &gt; 1 · distancia media entre pares altos ' + (af.distMediaParesAltos == null ? '—' : fmt(N(af.distMediaParesAltos), 1) + ' m'));
@@ -3333,6 +3370,12 @@ function colorPosicion(sku) {
   var a = mapaABC()[sku];
   return COLOR_ABC[a ? a.clase : 'C'];
 }
+/* v1.2: tramo cantilever { principal, ids[] } de una posición (solo si el motor lo entregó) */
+function spanDe(id) {
+  var sp = S.proy.resultado && S.proy.resultado.spanPorPosicion;
+  var v = sp && Object.prototype.hasOwnProperty.call(sp, id) ? sp[id] : null;
+  return v && typeof v === 'object' && Array.isArray(v.ids) && v.ids.length >= 2 ? v : null;
+}
 function refrescarElevacion() {
   var cvE = $('#canvas-elev');
   var id = S.rackHover || S.rackElev;
@@ -3378,6 +3421,9 @@ function refrescarElevacion() {
         var q = idx[mo + '|' + ni + '|' + sl];
         var x = padL + (espejo ? MO - mo : mo - 1) * cellW + (espejo ? K - sl : sl - 1) * cellW / K, w = cellW / K;
         var sku = q ? por[q.id] : null;
+        var spn = q ? spanDe(q.id) : null;   // v1.2: tramo cantilever de varias bahías
+        if (spn && spn.principal !== q.id) { S.elevHit.push({ x: x, y: y, w: w, h: cellH, id: spn.principal }); continue; }
+        if (spn) { var u0 = Infinity, u1 = -Infinity; spn.ids.forEach(function (sid) { var sq = posPorId()[sid]; if (!sq) return; var sx0 = padL + (espejo ? MO - sq.modulo : sq.modulo - 1) * cellW + (espejo ? K - (sq.slot || 1) : (sq.slot || 1) - 1) * cellW / K; u0 = Math.min(u0, sx0); u1 = Math.max(u1, sx0 + cellW / K); }); if (isFinite(u0) && u1 > u0) { x = u0; w = u1 - u0; } }
         var col = colorPosicion(sku);
         g.fillStyle = col || pal.vacioCol;
         g.fillRect(x + 1, y + 1, w - 2, cellH - 2);
@@ -3403,6 +3449,7 @@ function refrescarElevacion() {
           g.font = '700 9px system-ui,sans-serif';
           var rol = rolPos[q.id], lt = lotePos[q.id];
           var l2 = cl + (w > 40 && rol ? (rol === 'picking' ? ' · PICK' : ' · RES') : '') + (w > 56 && lt && lt.lote ? ' · ' + String(lt.lote).slice(0, 6) : '');
+          if (spn) l2 = spn.ids.length + ' bahías · ' + l2;
           g.strokeText(l2, x + w / 2, y + cellH / 2 + 8); g.fillText(l2, x + w / 2, y + cellH / 2 + 8);
           g.font = '10px system-ui,sans-serif';
         }
@@ -4147,11 +4194,14 @@ function hayContenido() {
   return p.contorno.length > 0 || p.racks.length > 0 || p.productos.length > 0 || !!p.plano.imagen || p.puertas.length > 0 || p.huecos.length > 0;
 }
 function cargarProyecto(obj) {
+  D12.recortePos = 0;
   S.proy = proyectoNormalizado(obj);
+  if (D12.recortePos > 0) aviso('El proyecto pedía demasiadas posiciones: se descartaron ' + D12.recortePos + ' rack(s) para que la pantalla no se cuelgue (tope ' + (M.MAX_POSICIONES_PROYECTO || 150000) + ' posiciones).', 'warn', 9000);
   S.undo = []; S.redo = []; S.sel = null; S.selVert = null; S.rackElev = null; S.rackHover = null; S.posSel = null; S.moviendo = null;
   S.busqueda = null; S.genInfo = null; S.valid = null; S.validVer = -1; S.traza = null; S.calib = null; S.erroresCSV = null; S.avisosCSV = null; S.csvCancelado = false; S.dib = null;
   S.img = null; S.imgSrc = null; S.pix = null; S.opcionesCambiadas = false; S.pagArt = 0; S.filtroArt = ''; S.analisis = null; S.sensibilidad = null; S.artSel = null;
   $('#art-filtro').value = ''; $('#trz-panel').hidden = true; $('#form-calib').hidden = true;
+  D12.vdmaSig = null;
   tocar();
   sincronizarImagen();
   S.encajarSiguiente = true;
@@ -4210,6 +4260,7 @@ function renderInforme() {
   var p = S.proy, res = p.resultado, el = $('#informe'), h = '';
   var cfg = p.config;
   var nPos = getPos().length;
+  h += marcaInformeHTML();
   h += '<h1>' + esc(p.nombre) + '</h1>';
   h += '<div>Informe de distribución y asignación de ubicaciones · ' + esc(hoy()) + '</div>';
   h += '<p><b>Propuesta a validar</b> por el responsable de almacén: norma de rociadores, ancho de pasillo real del equipo y resistencia del piso (anclaje sísmico y losa no se calculan aquí: verificar con el ingeniero estructural). Es un resultado de una heurística, no un óptimo garantizado.</p>';
@@ -4279,12 +4330,236 @@ async function imprimirInforme() {
   window.print();
 }
 
+/* ------------------------------------------------------------------ v1.2: Vista 3D, compartir por enlace, marca del informe y pasillo VDMA
+   (la lógica pesada está en vista3d.js y compartir.js; aquí solo el pegamento con la pantalla) */
+var V3 = window.AlmacenVista3D || null, CP = window.AlmacenCompartir || null;
+var D12 = { ctrl3d: null, vdma: null, vdmaSig: null, enlaceEnCurso: false };
+
+/* ---- B1 · Vista 3D ---- */
+function abrir3D() {
+  if (!V3) { aviso('No se pudo cargar vista3d.js (verifica que esté junto a index.html).', 'error'); return; }
+  if (!S.proy.racks.length) { aviso('Todavía no hay racks para mostrar en 3D. Genera racks en el paso 2.', 'warn'); return; }
+  var dlg = $('#dlg-3d');
+  if (!dlg.open) { if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', ''); }
+  if (!D12.ctrl3d) D12.ctrl3d = V3.conectar($('#d3-canvas'), {});
+  D12.ctrl3d.reiniciar();
+  pintar3D();
+  try { $('#d3-canvas').focus({ preventScroll: true }); } catch (e) { /* nada */ }
+}
+function pintar3D() {
+  if (!D12.ctrl3d) return;
+  var esc3;
+  try { esc3 = V3.construirEscena(S.proy, { colorPor: $('#d3-color').value, posiciones: getPos() }); }
+  catch (e) { console.error(e); aviso('No se pudo armar la vista 3D: ' + (e && e.message ? e.message : e), 'error'); return; }
+  D12.ctrl3d.poner(esc3);
+  var ley = $('#d3-leyenda');
+  ley.innerHTML = '';
+  esc3.leyenda.forEach(function (it) {
+    var s = document.createElement('span'), sw = document.createElement('span');
+    s.className = 'it'; sw.className = 'sw'; sw.style.background = it.color;
+    s.appendChild(sw); s.appendChild(document.createTextNode(it.etiqueta));
+    ley.appendChild(s);
+  });
+  var r = esc3.resumen, partes = [r.racks + ' racks', r.ocupadas + ' posiciones ocupadas' + (r.spans ? ' (' + r.spans + ' tramos cantilever de varias bahías)' : '')];
+  $('#d3-avisos').textContent = partes.join(' · ') + (esc3.avisos.length ? ' · ' + esc3.avisos.join(' ') : '');
+}
+async function png3D() {
+  if (!D12.ctrl3d) return;
+  var b = await D12.ctrl3d.png(S.proy.nombre, 1600, 1000);
+  if (!b) { aviso('No se pudo generar el PNG de la vista 3D.', 'error'); return; }
+  descargar(slug(S.proy.nombre) + '-3d.png', b);
+  aviso('PNG de la vista 3D descargado.', 'ok');
+}
+
+/* ---- B2 · compartir por enlace ---- */
+async function copiarEnlaceCompartir() {
+  var est = $('#comp-estado'), ta = $('#comp-texto');
+  est.textContent = 'Preparando el enlace…';
+  var r = await CP.codificar(S.proy);
+  if (!r.ok) { ta.hidden = true; est.textContent = r.motivo || 'No se pudo preparar el enlace.'; return; }
+  var yaDiceTamano = r.avisos.some(function (a) { return /caracteres/.test(a); });
+  var info = (yaDiceTamano ? '' : fmt(r.caracteres, 0) + ' caracteres. ') + r.avisos.join(' ');
+  if (!r.ofrecerEnlace) { ta.hidden = true; est.textContent = 'No se ofrece el enlace. ' + info; return; }
+  var url = CP.construirEnlace(r.texto, location), copiado = false;
+  ta.value = url; ta.hidden = false;
+  try { await navigator.clipboard.writeText(url); copiado = true; }
+  catch (e1) { try { ta.focus(); ta.select(); copiado = document.execCommand('copy'); } catch (e2) { copiado = false; } }
+  est.textContent = (copiado ? 'Enlace copiado. ' : 'El enlace quedó seleccionado en el recuadro: cópialo con Ctrl+C. ') + info;
+  if (!copiado) { ta.focus(); ta.select(); }
+}
+function limpiarFragmento() {
+  try { history.replaceState(null, '', location.pathname + location.search + '#' + S.tab); } catch (e) { /* file:// puede impedirlo */ }
+}
+/* Un enlace compartido es entrada NO confiable: se valida, se muestra qué contiene y NUNCA se carga sin que el usuario lo confirme. */
+async function procesarEnlaceCompartido(texto) {
+  if (D12.enlaceEnCurso || !CP) return;
+  D12.enlaceEnCurso = true;
+  try {
+    var d = await CP.decodificar(texto);
+    if (!d.ok) { await preguntar('No se pudo abrir el enlace', d.motivo + '\nNo se cargó nada y tu proyecto sigue como estaba.', [{ texto: 'Entendido', valor: true, primario: true }]); return; }
+    var q = 'Te compartieron el proyecto «' + d.resumen.nombre + '» (' + d.resumen.racks + ' racks' + (typeof d.resumen.posiciones === 'number' ? ', ' + d.resumen.posiciones + ' posiciones' : '') + ', ' + d.resumen.skus + ' artículos). ¿Abrirlo?' +
+      (d.avisos.length ? '\nAvisos al revisarlo: ' + d.avisos.slice(0, 3).join(' ') : '') + '\nNo incluye imagen del plano, logo ni resultados: tendrás que pulsar «Asignar».';
+    var eleccion = null;
+    for (;;) {
+      if (hayContenido()) {
+        eleccion = await preguntar('Abrir proyecto compartido', q + '\nAtención: ya tienes un proyecto con contenido y se reemplazará.',
+          [{ texto: 'Guardar el mío primero (.json)', valor: 'guardar' }, { texto: 'Abrir el compartido', valor: 'abrir', peligro: true }, { texto: 'Cancelar', valor: null, primario: true }]);
+        if (eleccion === 'guardar') { guardarJSON(); continue; }
+      } else {
+        eleccion = await preguntar('Abrir proyecto compartido', q, [{ texto: 'Abrir', valor: 'abrir', primario: true }, { texto: 'Cancelar', valor: null }]);
+      }
+      break;
+    }
+    if (eleccion === 'abrir') { cargarProyecto(d.proyecto); aviso('Proyecto compartido «' + S.proy.nombre + '» abierto. Pulsa «Asignar ubicaciones» para calcularlo.', 'ok', 7000); }
+    else aviso('No se abrió el proyecto compartido.', 'info', 3500);
+  } finally { D12.enlaceEnCurso = false; limpiarFragmento(); }
+}
+
+/* ---- B3 · marca del informe ---- */
+function marcaInformeHTML() {
+  var m = S.proy.marca;
+  if (!m || !(m.empresa || m.autor || logoValido(m.logo))) return '';
+  return '<div class="marca-informe">' + (logoValido(m.logo) ? '<img alt="Logo de ' + esc(m.empresa || 'la empresa') + '" src="' + m.logo + '">' : '') +   // el logo se validó con una expresión estricta: solo data:image/png|jpeg|webp;base64
+    '<div class="m-txt">' + (m.empresa ? '<b>' + esc(m.empresa) + '</b>' : '') + (m.autor ? '<span>Elaborado por: ' + esc(m.autor) + '</span>' : '') + '</div></div>';
+}
+function refrescarMarca() {
+  var m = S.proy.marca || { empresa: '', autor: '', logo: null };
+  setVal('marca-empresa', m.empresa); setVal('marca-autor', m.autor);
+  var v = $('#marca-vista'), q = $('#marca-quitar');
+  if (!v) return;
+  v.innerHTML = '';
+  if (logoValido(m.logo)) {
+    var im = document.createElement('img'); im.className = 'logo-vista'; im.alt = 'Logo cargado'; im.src = m.logo;
+    v.appendChild(document.createTextNode('Logo cargado:')); v.appendChild(im); q.hidden = false;
+  } else { v.textContent = 'Sin logo. La empresa, el autor y el logo aparecen en el encabezado del informe impreso; si están vacíos no aparece nada.'; q.hidden = true; }
+}
+function marcaCambiada(refrescarInf) {
+  guardarAutoDif();
+  if (refrescarInf && S.tab === 'reportes') renderInforme();
+}
+function editarMarca(campo, valor, final) {
+  S.proy.marca = S.proy.marca || { empresa: '', autor: '', logo: null };
+  var v = String(valor == null ? '' : valor).replace(/[\u0000-\u001f\u007f<>]/g, ' ').slice(0, 80);
+  S.proy.marca[campo] = final ? marcaLimpia({ empresa: v, autor: v })[campo] : v;
+  marcaCambiada(!!final);
+}
+async function subirLogo(file) {
+  if (!file) return;
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { aviso('El logo debe ser PNG, JPG o WEBP.', 'warn'); return; }
+  if (file.size > 12 * 1024 * 1024) { aviso('El archivo del logo pesa demasiado (máximo 12 MB).', 'warn'); return; }
+  var url = URL.createObjectURL(file), img = new Image();
+  try { await new Promise(function (ok, no) { img.onload = ok; img.onerror = no; img.src = url; }); }
+  catch (e) { URL.revokeObjectURL(url); aviso('No se pudo leer la imagen del logo.', 'error'); return; }
+  URL.revokeObjectURL(url);
+  var w0 = img.naturalWidth, h0 = img.naturalHeight;
+  if (!(w0 > 0 && h0 > 0)) { aviso('La imagen del logo no tiene tamaño válido.', 'error'); return; }
+  var jpg = file.type === 'image/jpeg', ancho = Math.min(320, w0), data = null;
+  for (var i = 0; i < 6 && !data; i++) {
+    var cw = Math.max(16, Math.round(ancho)), ch = Math.max(16, Math.round(h0 * cw / w0)), c = document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    var g = c.getContext('2d');
+    if (jpg) { g.fillStyle = '#ffffff'; g.fillRect(0, 0, cw, ch); }
+    g.drawImage(img, 0, 0, cw, ch);
+    var d = jpg ? c.toDataURL('image/jpeg', Math.max(0.4, 0.85 - i * 0.1)) : c.toDataURL('image/png');
+    if (logoValido(d)) data = d; else ancho *= 0.75;
+  }
+  if (!data) { aviso('No se pudo reducir el logo a menos de 400 KB. Prueba con una imagen más simple.', 'warn'); return; }
+  S.proy.marca = S.proy.marca || { empresa: '', autor: '', logo: null };
+  S.proy.marca.logo = data;
+  refrescarMarca(); marcaCambiada(true);
+  aviso('Logo cargado (' + Math.round(data.length / 1024) + ' KB). Aparecerá en el informe impreso.', 'ok');
+}
+
+/* ---- B5 · ancho de pasillo VDMA 15173 ---- */
+var NOMBRE_FALTA_VDMA = { radioGiroM: 'el radio de giro Wa (está en la ficha del equipo)', largoCargaM: 'el largo de la carga l6', holguraCargaRackM: 'la medida x (de la ficha del equipo)', holguraSeguridadM: 'la holgura de seguridad a' };
+function leerVDMA() {
+  var g = function (id) { var v = String($('#' + id).value).trim(); if (v === '') return null; var x = num(v, null); return x !== null && x >= 0 ? x : null; };
+  return { radioGiroM: g('v-wa'), largoCargaM: g('v-l6'), holguraCargaRackM: g('v-x'), holguraSeguridadM: g('v-a') };
+}
+function sincronizarVDMA() {
+  var pv = S.proy.config.pasilloVDMA || null, sig = JSON.stringify(pv);
+  if (D12.vdmaSig === sig) return;
+  D12.vdmaSig = sig;
+  if (pv) { setVal('v-wa', pv.radioGiroM); setVal('v-l6', pv.largoCargaM); setVal('v-x', pv.holguraCargaRackM); setVal('v-a', pv.holguraSeguridadM); }
+  else { setVal('v-wa', ''); setVal('v-l6', '1.2'); setVal('v-x', ''); setVal('v-a', ''); }
+  var r = $('#v-resultado'); if (r) r.innerHTML = '';
+  var u = $('#v-usar'); if (u) u.hidden = true;
+  D12.vdma = null;
+  refrescarMarca();
+}
+function listaHTML(l) { return Array.isArray(l) && l.length ? '<ul>' + l.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' : ''; }
+function calcularVDMA() {
+  var box = $('#v-resultado'), usar = $('#v-usar');
+  usar.hidden = true; D12.vdma = null;
+  if (typeof M.calcularPasilloVDMA !== 'function') { box.innerHTML = '<div class="msg aviso">El motor instalado todavía no incluye <code>calcularPasilloVDMA</code>: este cálculo estará disponible al actualizar <code>motor.js</code>.</div>'; return; }
+  var datos = leerVDMA(), faltan = Object.keys(NOMBRE_FALTA_VDMA).filter(function (k) { return datos[k] === null; });
+  if (faltan.length) {   // el programa NO rellena con valores inventados: pide lo que falta
+    box.innerHTML = '<div class="msg aviso"><b>Falta:</b> ' + faltan.map(function (k) { return esc(NOMBRE_FALTA_VDMA[k]); }).join('; ') + '. Escríbalo (puede ser 0 solo si su ficha lo indica) y vuelva a calcular.</div>';
+    return;
+  }
+  var r;
+  try { r = M.calcularPasilloVDMA(datos); } catch (e) { console.error(e); box.innerHTML = '<div class="msg error">No se pudo calcular: ' + esc(e && e.message ? e.message : e) + '</div>'; return; }
+  if (!r || r.ok !== true || !isFinite(Number(r.anchoM))) {
+    var fl = r && Array.isArray(r.falta) && r.falta.length ? '<div class="msg aviso"><b>Falta:</b> ' + r.falta.map(function (k) { return esc(NOMBRE_FALTA_VDMA[k] || k); }).join('; ') + '.</div>' : '<div class="msg aviso">No se pudo calcular con esos datos.</div>';
+    box.innerHTML = fl + listaHTML(r && r.avisos);
+    return;
+  }
+  var cfg = S.proy.config, ancho = Number(r.anchoM), dif = ancho - N(cfg.anchoPasillo);
+  box.innerHTML = '<div class="msg ok"><b>Ancho de pasillo calculado: ' + esc(fmt(ancho, 2)) + ' m</b></div>' +
+    '<div class="formula">' + esc(r.formula || 'Ast = Wa + l6 + x + a') + '<br>' + esc(r.formulaSustituida || '') + '</div>' +
+    '<p>Pasillo que usa ahora el programa: <b>' + esc(fmt(N(cfg.anchoPasillo), 2)) + ' m</b> · diferencia: ' + esc(fmt(dif, 2)) + ' m. Es una comparación de números: no se afirma que cumpla ninguna norma <span class="verif">[VERIFICAR con la norma y la ficha del equipo]</span>.</p>' +
+    (Array.isArray(r.supuestos) && r.supuestos.length ? '<b>Supuestos</b>' + listaHTML(r.supuestos) : '') + (Array.isArray(r.avisos) && r.avisos.length ? '<b>Avisos</b>' + listaHTML(r.avisos) : '');
+  D12.vdma = { datos: datos, ancho: ancho };
+  usar.hidden = false;
+}
+async function usarAnchoVDMA() {
+  var v = D12.vdma;
+  if (!v) return;
+  var ancho = Math.round(v.ancho * 100) / 100;
+  if (!(ancho >= 0.5 && ancho <= 12)) { aviso('El ancho calculado (' + fmt(ancho, 2) + ' m) está fuera del rango que acepta el programa (0,5 a 12 m).', 'warn', 7000); return; }
+  var ok = await preguntar('Usar este ancho como pasillo del equipo', 'El pasillo del equipo pasará de ' + fmt(N(S.proy.config.anchoPasillo), 2) + ' m a ' + fmt(ancho, 2) + ' m (cálculo VDMA 15173 con TUS datos). Se descartará la asignación actual y deberás asignar de nuevo. Puedes deshacer con Ctrl+Z.',
+    [{ texto: 'Usar ' + fmt(ancho, 2) + ' m', valor: true, primario: true }, { texto: 'Cancelar', valor: null }]);
+  if (!ok) return;
+  mutar(function () { S.proy.config.anchoPasillo = ancho; S.proy.config.pasilloVDMA = clonar(v.datos); });
+  aviso('Pasillo del equipo actualizado a ' + fmt(ancho, 2) + ' m. Vuelve a asignar ubicaciones.', 'ok', 6000);
+}
+
+function iniciarV12(textoEnlace) {
+  on('#btn-3d-asignar', 'click', abrir3D);
+  on('#rep-3d', 'click', abrir3D);
+  on('#d3-cerrar', 'click', function () { var d = $('#dlg-3d'); if (d.open) d.close(); });
+  on('#d3-reiniciar', 'click', function () { if (D12.ctrl3d) D12.ctrl3d.reiniciar(); });
+  on('#d3-color', 'change', pintar3D);
+  on('#d3-png', 'click', png3D);
+  on('#a-cant-combinar', 'change', function () { leerOpcionesAsignarV11(); opcionAsignarCambiada(); });
+  on('#v-calcular', 'click', calcularVDMA);
+  on('#v-usar', 'click', usarAnchoVDMA);
+  ['v-wa', 'v-l6', 'v-x', 'v-a'].forEach(function (id) { on('#' + id, 'input', function () { $('#v-usar').hidden = true; D12.vdma = null; }); });
+  /* compartir */
+  if (!CP || !CP.soportado()) { $('#comp-copiar').hidden = true; $('#comp-nosoporta').hidden = false; }
+  else on('#comp-copiar', 'click', copiarEnlaceCompartir);
+  on('#comp-texto', 'focus', function (e) { e.target.select(); });
+  on(window, 'hashchange', function () { var t = CP && CP.textoDeHash(location.hash); if (t) procesarEnlaceCompartido(t); });
+  if (textoEnlace) setTimeout(function () { procesarEnlaceCompartido(textoEnlace); }, 80);
+  /* marca */
+  on('#marca-empresa', 'input', function (e) { editarMarca('empresa', e.target.value, false); });
+  on('#marca-autor', 'input', function (e) { editarMarca('autor', e.target.value, false); });
+  on('#marca-empresa', 'change', function (e) { editarMarca('empresa', e.target.value, true); refrescarMarca(); });
+  on('#marca-autor', 'change', function (e) { editarMarca('autor', e.target.value, true); refrescarMarca(); });
+  on('#marca-logo', 'change', function (e) { var f = e.target.files && e.target.files[0]; if (f) subirLogo(f); e.target.value = ''; });
+  on('#marca-logo-lbl', 'keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#marca-logo').click(); } });
+  on('#marca-quitar', 'click', function () { if (S.proy.marca) S.proy.marca.logo = null; refrescarMarca(); marcaCambiada(true); aviso('Logo quitado.', 'info', 2500); });
+  refrescarMarca();
+}
+
 /* ------------------------------------------------------------------ arranque y eventos */
 function on(sel, ev, fn, opt) {
   var el = typeof sel === 'string' ? $(sel) : sel;
   if (el) el.addEventListener(ev, fn, opt);
 }
 function iniciar() {
+  /* v1.2: el enlace compartido (#compartir=…) se lee AQUÍ, antes de que irTab() reescriba el fragmento con el nombre de la pestaña */
+  var textoEnlace = CP ? CP.textoDeHash(location.hash) : null;
   cv = $('#lienzo');
   ctx = cv.getContext('2d');
 
@@ -4594,6 +4869,7 @@ function iniciar() {
   llenarEquipos();
   sincronizarCampos();
   var h = (location.hash || '').replace('#', '');
+  // un fragmento «compartir=…» no es una pestaña: este enrutador lo ignora (no está en la lista) y lo atiende iniciarV12()
   var tabInicial = ['plano', 'racks', 'articulos', 'asignar', 'analisis', 'reportes'].indexOf(h) >= 0 ? h : 'plano';
   S.encajarSiguiente = true;
   irTab(tabInicial);
@@ -4601,6 +4877,7 @@ function iniciar() {
   if (restaurado) aviso('Se restauró tu proyecto «' + S.proy.nombre + '» (autoguardado en este navegador).', 'info', 5000);
   if (S.proy.resultado && !S.rackElev && S.proy.racks.length) S.rackElev = S.proy.racks[0].id;
   $('#estado-guardado').textContent = guardado ? 'Autoguardado activo' : 'Sin guardar aún';
+  iniciarV12(textoEnlace);
   // exponer para pruebas manuales
   iniciarGuia(restaurado);
   window.AlmacenUI = { estado: S, encajar: encajar, irTab: irTab };

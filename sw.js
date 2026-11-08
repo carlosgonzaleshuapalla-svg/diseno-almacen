@@ -1,6 +1,6 @@
 /* Service worker generado por herramientas/construir_web.py — no editar a mano. */
-const VERSION = 'almacen-8daf48022b2e';
-const ARCHIVOS = ["./analisis.js", "./app.js", "./estilos.css", "./icons/icon-180.png", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png", "./", "./manifest.webmanifest", "./motor.js", "./registro-sw.js"];
+const VERSION = 'almacen-39127e99cc66';
+const ARCHIVOS = ["./analisis.js", "./app.js", "./compartir.js", "./estilos.css", "./icons/icon-180.png", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png", "./", "./manifest.webmanifest", "./motor.js", "./registro-sw.js", "./vista3d.js"];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
 });

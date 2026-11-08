@@ -125,7 +125,7 @@
 
   /** Posiciones requeridas por producto (misma regla del motor: ceil(cantidad/unidadesPorUbic), dividido por la capacidad de
    * ubicaciones por posición del tipo —piso/cantilever—; un SKU de cross-docking no ocupa rack; `maximo` usa stockMax). */
-  function demanda(productos, capPorTipo, maximo) {
+  function demanda(productos, capPorTipo, maximo, tram) {
     const vistos = new Map();
     const cap = capPorTipo || {};
     return productos.map(function (p) {
@@ -139,14 +139,16 @@
       const smOk = typeof p.stockMax === 'number' && isFinite(p.stockMax) && p.stockMax >= 0;
       const ppOk = typeof p.picksPico === 'number' && isFinite(p.picksPico) && p.picksPico >= 0;
       const valido = upu > 0 && !dup;
-      const nec = function (u) { return valido ? Math.ceil(Math.ceil(u / upu - 1e-9) / c - 1e-9) : 0; };
+      // v1.2: una carga de cantilever más larga que la bahía ocupa k bahías contiguas por ubicación (k con la bahía mediana; el motor usa la de cada rack)
+      const kS = tram && tipo === 'cantilever' && typeof p.largoM === 'number' && isFinite(p.largoM) && p.largoM > tram.bahia + 1e-9 ? Math.ceil(p.largoM / tram.bahia - 1e-9) : 1;
+      const nec = function (u) { return valido ? Math.ceil(Math.ceil(u / upu - 1e-9) / c - 1e-9) * kS : 0; };
       const xd = p.crossdock === true;
       const reqAct = xd ? 0 : nec(cant), reqPico = xd ? 0 : nec(smOk ? p.stockMax : cant);
       const picks = Math.max(0, num(p.picks, 0));
       return {
         sku: sku, familia: p.familia === undefined || p.familia === null ? '' : String(p.familia),
         tipo: tipo, picks: picks, upu: upu,
-        req: maximo ? reqPico : reqAct, reqActual: reqAct, reqPico: reqPico, stockMaxDado: smOk, picksPicoDado: ppOk, picksPico: ppOk ? p.picksPico : picks,
+        kTramo: kS, req: maximo ? reqPico : reqAct, reqActual: reqAct, reqPico: reqPico, stockMaxDado: smOk, picksPicoDado: ppOk, picksPico: ppOk ? p.picksPico : picks,
         crossdock: xd, valido: valido, duplicado: dup
       };
     });
@@ -804,8 +806,18 @@
     ctx.productos.forEach(function (p) { const k = String(p.sku); if (!prods.has(k)) prods.set(k, p); });
     const rackPorId = new Map(); ctx.racks.forEach(function (r) { if (!rackPorId.has(r.id)) rackPorId.set(r.id, r); });
     // reparto del stock real del SKU entre sus posiciones, llenando en orden (la última queda parcial)
+    // v1.2: una carga larga de cantilever ocupa k bahías contiguas (spanPorPosicion): el SKU cuenta UNA ubicación por tramo (la principal)
+    // y su peso se reparte por igual entre las k bahías que cubre; las bahías secundarias no reciben stock propio.
+    const spanAs = asig.spanPorPosicion && typeof asig.spanPorPosicion === 'object' ? asig.spanPorPosicion : {};
+    const spanDe = function (id) { return Object.prototype.hasOwnProperty.call(spanAs, id) ? spanAs[id] : null; };
     const porSku = new Map();
-    ctx.posiciones.forEach(function (q) { const s = asig.porPosicion[q.id]; if (s !== undefined) { const k = String(s); if (!porSku.has(k)) porSku.set(k, []); porSku.get(k).push(q); } });
+    ctx.posiciones.forEach(function (q) {
+      const s = asig.porPosicion[q.id];
+      if (s === undefined) return;
+      const sp = spanDe(q.id);
+      if (sp && sp.principal !== q.id) return;
+      const k = String(s); if (!porSku.has(k)) porSku.set(k, []); porSku.get(k).push(q);
+    });
     const kgPos = new Map();
     let sinPeso = 0;
     porSku.forEach(function (qs, sku) {
@@ -818,7 +830,9 @@
         const cap = (q.capacidadUb > 0 ? q.capacidadUb : 1) * upu;
         const tom = Math.min(resto, cap);
         resto -= tom;
-        kgPos.set(q.id, tom * peso);
+        const sp = spanDe(q.id);
+        if (sp && Array.isArray(sp.ids) && sp.ids.length > 1) sp.ids.forEach(function (id) { kgPos.set(id, (tom * peso) / sp.ids.length); });
+        else kgPos.set(q.id, tom * peso);
       });
     });
     const mods = new Map();
@@ -1136,14 +1150,15 @@
       mismoConjunto: mismoConj, sinUbicarCon: (con.sinUbicar || []).length, sinUbicarSin: (sin.sinUbicar || []).length
     };
     out.reposPorPeriodo = kr.reposPorPeriodo; out.distMediaReposicion = kr.distMediaReposicion; out.horasReposicion = horasRepos;
+    out.metodoDistancia = kr.metodoDistancia || null;   // v1.2: 'caminada' | 'mixta-con-respaldo-recta'
     const falta = out.faltaUnidadesPorLinea.length ? ' [FALTA: unidades por línea de pedido en ' + out.faltaUnidadesPorLinea.length + ' SKU; se supuso 1]' : '';
     out.metricas.push(metrica('repos_por_periodo', 'Reposiciones por periodo', kr.reposPorPeriodo, 'palets-equivalentes/periodo',
       'repos = Σ picks · unidadesPorLinea / unidadesPorUbic (1 unidad por línea si falta el dato)',
       f(kr.reposPorPeriodo, 1) + ' palets-equivalentes/periodo; ' + kr.skusConPicking + ' SKU con picking separado' + falta,
       out.faltaUnidadesPorLinea.length ? 'Cifra provisional: falta unidadesPorLinea y subestima las reposiciones si cada línea saca más de 1 unidad.' : 'Con las unidades por línea declaradas.', null, out.faltaUnidadesPorLinea.length ? 'atencion' : 'info'));
     out.metricas.push(metrica('repos_dist_horas', 'Distancia media y horas de reposición', horasRepos, 'h/periodo',
-      'H = repos · 2 · d̄_reserva→picking / v / 3600', f(kr.reposPorPeriodo, 1) + ' · 2 · ' + f(kr.distMediaReposicion, 1) + ' / ' + f(op.velocidadMs, 1) + ' / 3600 = ' + f(horasRepos, 2) + ' h/periodo (solo traslado)',
-      'Tiempo de traslado de las reposiciones; no incluye maniobra de carga.', null, 'info'));
+      'H = repos · 2 · d̄_reserva→picking / v / 3600, con d̄ = distancia CAMINADA sobre la malla entre los puntos de acceso de reserva y picking', f(kr.reposPorPeriodo, 1) + ' · 2 · ' + f(kr.distMediaReposicion, 1) + ' / ' + f(op.velocidadMs, 1) + ' / 3600 = ' + f(horasRepos, 2) + ' h/periodo (solo traslado)',
+      'Tiempo de traslado de las reposiciones con distancia caminada' + (kr.metodoDistancia === 'mixta-con-respaldo-recta' ? ' (MIXTA: ' + f(kr.paresRespaldoRecta, 0) + ' posición(es) de reserva sin camino calculable usaron la línea recta de respaldo)' : '') + '; no incluye maniobra de carga.', null, kr.metodoDistancia === 'mixta-con-respaldo-recta' ? 'atencion' : 'info'));
     out.metricas.push(metrica('repos_comparativa', 'Costo con vs sin picking/reserva', delta, '%',
       'Δ% = (costo_con − costo_sin) / costo_sin · 100 (mismo costo del motor: m equivalentes por periodo)',
       f(cC, 0) + ' vs ' + f(cS, 0) + (mismoConj ? ' → ' + f(delta, 1) + ' %' : ' → no comparable (conjuntos distintos)') + '; recorrido medio de picks ' + f(con.kpis.distMediaPonderada, 2) + ' vs ' + f(sin.kpis.distMediaPonderada, 2) + ' m',
@@ -1454,7 +1469,12 @@
       Object.keys(por).forEach(function (t) { capPorTipo[t] = mediana(por[t]); });
     }
     const dimMax = P.config && P.config.dimensionarPor === 'maximo';
-    const dem = demanda(productos, capPorTipo, dimMax);
+    let bahiaCant = null;
+    {
+      const bs = posiciones.filter(function (q) { return q.tipo === 'cantilever' && q.anchoBahiaM > 0; }).map(function (q) { return q.anchoBahiaM; });
+      if (bs.length) bahiaCant = mediana(bs);
+    }
+    const dem = demanda(productos, capPorTipo, dimMax, cfg.cantileverCombinar !== false && bahiaCant ? { bahia: bahiaCant } : null);
     const nDup = dem.filter(function (d) { return d.duplicado; }).length;
     if (nDup) adv.push(nDup + ' fila(s) con SKU duplicado se ignoraron en la capacidad y el movimiento (el motor tampoco las asigna): unifique las cantidades.');
     const demValida = dem.filter(function (d) { return d.valido; });
@@ -1615,6 +1635,22 @@
     met.push(metrica('paso_fila', 'Paso de fila (módulo repetitivo transversal)', paso, 'm',
       'p = 2·fondo + flue + ancho de pasillo', '2·' + f(F, 2) + ' + ' + f(cfg.flue, 2) + ' + ' + f(cfg.anchoPasillo, 2) + ' = ' + f(paso, 2) + ' m',
       'Cada p metros hay un par de racks espalda con espalda y un pasillo; la densidad por m² es aproximadamente inversa a p.', null, 'info'));
+    // v1.2: ancho de pasillo calculado (Ast = Wa + l6 + x + a) frente al configurado; solo si el usuario guardó sus datos (config.pasilloVDMA). Sin afirmar cumplimiento.
+    if (cfg.pasilloVDMA && Mo.calcularPasilloVDMA) {
+      const vd = Mo.calcularPasilloVDMA(cfg.pasilloVDMA);
+      const refVd = REF_VERIFICAR('Forma Ast = Wa + l6 + x + a consultada en una guía de fabricante; no verificada con el texto de VDMA 15173 / FEM 4.005. Valide con la norma y la ficha del equipo.');
+      if (vd.ok) {
+        const dif = vd.anchoM - cfg.anchoPasillo;
+        met.push(metrica('pasillo_vdma', 'Ancho de pasillo calculado (VDMA 15173) vs configurado', vd.anchoM, 'm',
+          vd.formula + ' (Wa = radio de giro, l6 = largo de la carga, x y a = términos que usted dio)',
+          vd.formulaSustituida + '; ancho configurado = ' + f(cfg.anchoPasillo, 2) + ' m → ancho calculado VDMA = ' + f(vd.anchoM, 2) + ' m vs ancho configurado = ' + f(cfg.anchoPasillo, 2) + ' m (diferencia calculado − configurado = ' + (dif >= 0 ? '+' : '−') + f(Math.abs(dif), 2) + ' m)',
+          'Comparación informativa con sus datos; el programa no afirma cumplimiento: el pasillo real lo fija la ficha del equipo y el responsable de seguridad. ' + vd.avisos.join(' '), refVd, 'info'));
+      } else {
+        met.push(metrica('pasillo_vdma', 'Ancho de pasillo calculado (VDMA 15173) vs configurado', null, 'm',
+          vd.formula, 'FALTA: ' + vd.falta.join(', ') + ' (config.pasilloVDMA incompleto); ancho configurado = ' + f(cfg.anchoPasillo, 2) + ' m',
+          'Sin todos los datos del equipo no se calcula nada ni se inventan valores. ' + vd.avisos.join(' '), refVd, 'info'));
+      }
+    }
 
     // sensibilidad al ancho de pasillo (fórmula + comprobación con el generador)
     const autoRacks = racks.filter(function (r) { return r.auto === true; });
@@ -1869,8 +1905,8 @@
     ctx.fuenteAsig = function () {
       if (asigV !== undefined) return asigV;
       const R_ = P.resultado;
-      if (R_ && R_.porPosicion && Object.keys(R_.porPosicion).length) asigV = { porPosicion: R_.porPosicion, lotePorPosicion: R_.lotePorPosicion || null, rolPorPosicion: R_.rolPorPosicion || null, fuente: 'vigente' };
-      else if (rec) asigV = { porPosicion: rec.porPosicion, lotePorPosicion: rec.lotePorPosicion || null, rolPorPosicion: rec.rolPorPosicion || null, fuente: 'recomendada' };
+      if (R_ && R_.porPosicion && Object.keys(R_.porPosicion).length) asigV = { porPosicion: R_.porPosicion, lotePorPosicion: R_.lotePorPosicion || null, rolPorPosicion: R_.rolPorPosicion || null, spanPorPosicion: R_.spanPorPosicion || null, fuente: 'vigente' };
+      else if (rec) asigV = { porPosicion: rec.porPosicion, lotePorPosicion: rec.lotePorPosicion || null, rolPorPosicion: rec.rolPorPosicion || null, spanPorPosicion: rec.spanPorPosicion || null, fuente: 'recomendada' };
       else asigV = null;
       return asigV;
     };
@@ -1890,6 +1926,8 @@
     supuestos.push('v1.1 — Evacuación: distancia caminando por la malla desde el punto de acceso de cada posición hasta la salida más cercana (si no hay salidas de emergencia marcadas, hasta cualquier puerta, con aviso). Los límites de distancia y de ancho de evacuación son SUYOS (evacMaxM, anchoEvacuacionMin); sin ellos solo se muestran valores y no se afirma cumplimiento [VERIFICAR RNE A.130 / ITSE].');
     supuestos.push('v1.1 — Ancho de paso = cuerda libre mínima de la malla en 4 direcciones (resolución ± la celda); en pasillos oblicuos sobrestima. Muelle/staging: huella de palet 1,2×1,0 m y factor de maniobra 1,5 son valores típicos propios [VERIFICAR] si usted no da los suyos.');
     supuestos.push('v1.1 — Cargas por módulo con la asignación ' + (ctx.fuenteAsig() ? ctx.fuenteAsig().fuente : 'inexistente') + ': el stock de cada SKU se reparte llenando sus posiciones en orden; no es presión sobre la losa [VERIFICAR ingeniero estructural].');
+    supuestos.push('v1.2 — Cantilever: con config.cantileverCombinar activa (por defecto), una carga más larga que la bahía ocupa k = ⌈largo / bahía⌉ bahías contiguas del mismo rack y nivel: en la capacidad y el pico cada ubicación de esos SKU cuenta k posiciones (con la bahía mediana de los racks de cantilever; el motor usa la de cada rack) y en las cargas su peso se reparte entre las k bahías. [VERIFICAR con la ficha del fabricante]');
+    supuestos.push('v1.2 — Reposición (picking/reserva): la distancia reserva→picking es CAMINADA sobre la malla del plano, no en línea recta; si un par no tiene camino calculable el motor usa la recta de respaldo y lo avisa (kpis.reposicion.metodoDistancia).');
     if (dimMax) supuestos.push('La capacidad se dimensiona por el MÁXIMO (config.dimensionarPor = «maximo»): posiciones necesarias con stockMax (o cantidad si está vacío).');
     if (dem.some(function (d) { return d.crossdock && d.valido; })) supuestos.push('Los SKU de cross-docking no ocupan posiciones de rack: se excluyen de la capacidad y de los picks ubicados.');
     Object.keys(capPorTipo).forEach(function (t) { if (capPorTipo[t] > 1) supuestos.push('Tipo «' + t + '»: ' + f(capPorTipo[t], 0) + ' ubicaciones por posición (mediana de capacidadUb) para convertir stock en posiciones.'); });
@@ -2224,7 +2262,7 @@
         faltantes.slice(0, 5).map(function (s) { return s.sku + ': faltan ' + s.faltan + ' (' + s.motivo + ')'; }).join('; ') + '.',
         'Faltantes = Σ (posReq − posiciones ubicadas)', faltantes.length + ' SKU → ' + faltan + ' posiciones',
         { magnitud: faltan, unidad: 'posiciones', texto: faltan + ' posiciones de stock sin lugar compatible.' },
-        'Revisar el motivo de cada SKU (capacidad, peso, altura, zona, tipo, incompatibilidad) y corregir el dato o ampliar la capacidad.', 'alta', [], 1);
+        'Revisar el motivo de cada SKU (capacidad, peso, altura, altura del apilado en piso, largo en cantilever, zona, tipo, incompatibilidad) y corregir el dato o ampliar la capacidad.', 'alta', [], 1);
     }
 
     /* ---- v1.1: recomendaciones nuevas (sin afirmar cumplimiento si falta el límite del usuario) ---- */
