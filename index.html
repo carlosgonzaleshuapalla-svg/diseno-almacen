@@ -44,9 +44,19 @@
   <div class="barra-acc">
     <button type="button" id="btn-ejemplo" class="btn primario">Cargar ejemplo</button>
     <button type="button" id="btn-nuevo" class="btn">Nuevo</button>
+    <button type="button" id="btn-guia" class="btn" aria-haspopup="dialog">Guía</button>
     <span id="estado-guardado" class="guardado" role="status" aria-live="polite"></span>
   </div>
 </header>
+
+<div id="banner-guia" class="banner-guia" role="region" aria-label="Primeros pasos" hidden>
+  <span><b>¿Primera vez?</b> Mira la guía de 1 minuto o prueba con un ejemplo ya armado.</span>
+  <span class="banner-acc">
+    <button type="button" class="btn primario peq-btn" id="banner-ver">Ver guía</button>
+    <button type="button" class="btn peq-btn" id="banner-ejemplo">Cargar ejemplo</button>
+    <button type="button" class="btn peq-btn" id="banner-cerrar" aria-label="Cerrar este aviso">✕</button>
+  </span>
+</div>
 
 <main id="principal">
 
@@ -630,6 +640,18 @@
     <p id="dlg-texto"></p>
     <div class="dlg-acc" id="dlg-acc"></div>
   </form>
+</dialog>
+
+<dialog id="dlg-guia" aria-labelledby="guia-titulo">
+  <div class="guia-cab"><span id="guia-prog" class="peq muted"></span></div>
+  <h3 id="guia-titulo"></h3>
+  <div id="guia-cuerpo" class="guia-cuerpo"></div>
+  <div class="dlg-acc guia-acc">
+    <button type="button" class="btn" id="guia-ant">Anterior</button>
+    <button type="button" class="btn" id="guia-ir">Ir a este paso</button>
+    <button type="button" class="btn primario" id="guia-sig">Siguiente</button>
+    <button type="button" class="btn" id="guia-cerrar">Cerrar</button>
+  </div>
 </dialog>
 
 <script src="motor.js"></script>

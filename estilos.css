@@ -357,6 +357,7 @@ ul.limpia { list-style: none; padding: 0; margin: 0; }
   background: #fff; color: #111; border: 1px solid var(--borde); border-radius: 6px; padding: 24px 28px; max-width: 980px; margin: 0 auto;
   box-shadow: var(--sombra); font-size: 13px;
 }
+
 #informe h1 { font-size: 1.5rem; margin: 0 0 .2rem; }
 #informe h2 { font-size: 1.1rem; margin: 1.2rem 0 .4rem; border-bottom: 2px solid #1b5cc0; padding-bottom: 2px; }
 #informe img.plano { width: 100%; height: auto; border: 1px solid #999; }
@@ -428,6 +429,12 @@ ul.limpia { list-style: none; padding: 0; margin: 0; }
 #informe h3 { margin: .8rem 0 .3rem; font-size: 1.02em; }
 #informe .rec-inf { border-left: 3px solid #999; padding-left: 8px; margin: 6px 0; break-inside: avoid; }
 #informe code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; }
+/* Informe en pantalla pequeña: las tablas anchas se desplazan dentro del informe, la página no se ensancha (Firefox/Safari móvil). Solo en pantalla: al imprimir no se toca. */
+@media screen and (max-width: 900px) {
+  #informe { overflow-x: auto; min-width: 0; padding: 14px 12px; }
+  #informe table { display: block; overflow-x: auto; max-width: 100%; }
+  #informe .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+}
 @media (max-width: 900px) { .grid-an { grid-template-columns: 1fr; } }
 
 /* ---------- Responsive ---------- */
@@ -456,13 +463,31 @@ ul.limpia { list-style: none; padding: 0; margin: 0; }
 @media (max-width: 640px) {
   .rejilla2 { grid-template-columns: 1fr; }
   .proy input { width: 150px; }
+  /* Cabecera compacta en teléfono: los 6 pasos en una sola fila deslizable, para dejar sitio al plano. */
+  #barra { gap: 6px; padding: 4px 8px; }
+  #pasos { flex: 1 1 100%; order: 3; flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; scrollbar-width: none; }
+  #pasos::-webkit-scrollbar { display: none; }
+  .paso { flex: 0 0 auto; padding: 4px 8px; }
+  .paso .txt small, .paso.falta .txt small, .paso[aria-current="page"] .txt small { display: none; }
+  .paso .txt b { white-space: nowrap; font-size: .9rem; }
+  .barra-acc { margin-left: auto; gap: 6px; }
+  #estado-guardado { display: none; }
 }
+
+/* ---------- Guía de primeros pasos ---------- */
+.banner-guia { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 14px; background: var(--acento-2); border-bottom: 1px solid var(--acento); font-size: .92rem; }
+.banner-guia[hidden] { display: none; }
+.banner-acc { display: flex; gap: 6px; flex-wrap: wrap; }
+#dlg-guia { max-width: min(520px, calc(100vw - 24px)); }
+.guia-cuerpo { margin: .4rem 0 1rem; line-height: 1.45; }
+.guia-cuerpo ul { margin: .4rem 0; padding-left: 1.2rem; }
+.guia-acc { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 
 /* ---------- Impresión ---------- */
 @media print {
   @page { size: A4; margin: 12mm; }
   html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
-  #barra, #area-lienzo, #area-articulos, #area-analisis, #avisos, dialog, .saltar, .pag-cab, .grid-rep { display: none !important; }
+  #barra, #banner-guia, #area-lienzo, #area-articulos, #area-analisis, #avisos, dialog, .saltar, .pag-cab, .grid-rep { display: none !important; }
   main { display: block !important; overflow: visible !important; }
   #area-reportes, #area-reportes[hidden] { display: block !important; overflow: visible !important; background: #fff !important; }
   .pagina-int { padding: 0 !important; max-width: none !important; }

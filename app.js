@@ -4602,12 +4602,53 @@ function iniciar() {
   if (S.proy.resultado && !S.rackElev && S.proy.racks.length) S.rackElev = S.proy.racks[0].id;
   $('#estado-guardado').textContent = guardado ? 'Autoguardado activo' : 'Sin guardar aún';
   // exponer para pruebas manuales
+  iniciarGuia(restaurado);
   window.AlmacenUI = { estado: S, encajar: encajar, irTab: irTab };
 }
 function opcionAsignarCambiada() {
   if (S.proy.resultado) S.opcionesCambiadas = true;
   guardarAutoDif();
   if (S.tab === 'asignar') refrescarAsignar();
+}
+/* ---- Guía de primeros pasos (v1.2): banner de bienvenida la 1.ª vez + diálogo paso a paso ---- */
+var CLAVE_GUIA = 'almacen_guia_v1';
+var GUIA_PASOS = [
+  { tab: 'plano', t: '1 · Plano', h: '<p>Dibuja el contorno del almacén. Tienes tres formas:</p><ul><li><b>Subir la imagen</b> del plano (PNG/JPG), <b>calibrar la escala</b> con 2 clics y una medida real, y pulsar «Auto-trazar» (funciona con planos de líneas oscuras sobre fondo claro).</li><li>Usar una <b>plantilla</b> (rectángulo o forma en L) escribiendo las medidas.</li><li>Dibujar el contorno punto por punto.</li></ul><p>Marca también las <b>puertas</b> (recepción, despacho, salida de emergencia) y las <b>zonas</b> (frío, peligrosos, muelle…).</p>' },
+  { tab: 'racks', t: '2 · Racks', h: '<p>Elige el <b>equipo</b> (carretilla, apilador…): define el ancho del pasillo. Luego pulsa <b>«Generar racks automáticamente»</b> y ajusta a mano lo que quieras (mover, rotar, duplicar).</p><p>Los avisos en vivo te dicen si un rack se solapa, queda fuera del contorno o deja un pasillo angosto.</p>' },
+  { tab: 'articulos', t: '3 · Artículos', h: '<p>Carga tus SKU con su <b>cantidad, picks (salidas) por periodo, peso y alto</b>. Puedes escribirlos en la tabla o <b>importar un CSV</b>: pulsa «Descargar plantilla» para ver el formato exacto (separador <code>;</code>).</p><p>Opcional: importa tus <b>pedidos</b> para que el programa acerque los artículos que se piden juntos.</p>' },
+  { tab: 'asignar', t: '4 · Asignar', h: '<p>Pulsa <b>«Asignar ubicaciones»</b>. El programa pone los artículos de más rotación cerca de la salida y a un nivel cómodo, respetando peso, altura, zonas y vencimientos.</p><p>Mira el mapa por clase ABC, busca un SKU para ver su ruta caminada y, si quieres, muévelo a mano. Todo supuesto aparece en pantalla.</p>' },
+  { tab: 'analisis', t: '5 · Análisis', h: '<p>Pulsa <b>«Calcular análisis»</b>: áreas, densidad, utilización, déficit de capacidad, tiempos, muelle, evacuación y escenarios «¿qué pasa si…?». Cada resultado muestra su <b>fórmula con los números sustituidos</b>.</p><p>Los valores de referencia son típicos y deben verificarse con la ficha de tu equipo y con los profesionales competentes.</p>' },
+  { tab: 'reportes', t: '6 · Reportes', h: '<p>Descarga los <b>CSV</b> de ubicaciones y artículos, el <b>PNG</b> del plano, o imprime el <b>informe</b> (en el diálogo de impresión elige «Guardar como PDF»).</p><p>Guarda tu proyecto como <b>.json</b> para abrirlo más tarde. Además, se autoguarda en este navegador. Nada sale de tu dispositivo.</p>' }
+];
+var guiaPaso = 0;
+function guiaVista(v) { try { if (v === undefined) return localStorage.getItem(CLAVE_GUIA) === '1'; localStorage.setItem(CLAVE_GUIA, v ? '1' : '0'); } catch (e) { return false; } }
+function pintarGuia() {
+  var p = GUIA_PASOS[guiaPaso];
+  $('#guia-prog').textContent = 'Paso ' + (guiaPaso + 1) + ' de ' + GUIA_PASOS.length;
+  $('#guia-titulo').textContent = p.t;
+  $('#guia-cuerpo').innerHTML = p.h;
+  $('#guia-ant').disabled = guiaPaso === 0;
+  $('#guia-sig').textContent = guiaPaso === GUIA_PASOS.length - 1 ? 'Listo' : 'Siguiente';
+}
+function abrirGuia(n) {
+  guiaPaso = Math.max(0, Math.min(GUIA_PASOS.length - 1, n || 0));
+  var d = $('#dlg-guia');
+  pintarGuia();
+  guiaVista(true); $('#banner-guia').hidden = true;
+  if (d && !d.open) { if (typeof d.showModal === 'function') d.showModal(); else d.setAttribute('open', ''); }
+}
+function cerrarGuia() { var d = $('#dlg-guia'); if (d && d.open) { if (typeof d.close === 'function') d.close(); else d.removeAttribute('open'); } }
+function iniciarGuia(yaTieneProyecto) {
+  on('#btn-guia', 'click', function () { abrirGuia(0); });
+  on('#guia-ant', 'click', function () { if (guiaPaso > 0) { guiaPaso--; pintarGuia(); } });
+  on('#guia-sig', 'click', function () { if (guiaPaso < GUIA_PASOS.length - 1) { guiaPaso++; pintarGuia(); } else cerrarGuia(); });
+  on('#guia-ir', 'click', function () { var t = GUIA_PASOS[guiaPaso].tab; cerrarGuia(); irTab(t); });
+  on('#guia-cerrar', 'click', cerrarGuia);
+  on('#banner-ver', 'click', function () { abrirGuia(0); });
+  on('#banner-ejemplo', 'click', function () { $('#banner-guia').hidden = true; guiaVista(true); cargarEjemplo(); });
+  on('#banner-cerrar', 'click', function () { $('#banner-guia').hidden = true; guiaVista(true); });
+  // el aviso solo se muestra a quien llega por primera vez y todavía no tiene proyecto
+  if (!yaTieneProyecto && !guiaVista()) $('#banner-guia').hidden = false;
 }
 function descargarPlantilla() {
   descargar('plantilla-articulos.csv', conBOM(M.plantillaCSVProductos()), 'text/csv;charset=utf-8');
